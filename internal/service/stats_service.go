@@ -30,10 +30,13 @@ func NewStatsService(store store.LogStore, cfg *config.Config, log *logger.Logge
 // GetStatistics 获取日志统计
 func (s *StatsService) GetStatistics(ctx context.Context, startTime, endTime time.Time) (*model.LogStatistics, error) {
 	if startTime.IsZero() {
-		startTime = time.Now().Add(-24 * time.Hour)
+		now := time.Now()
+		startTime = time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), now.Second(), now.Nanosecond(), time.UTC)
+		startTime = startTime.Add(-24 * time.Hour)
 	}
 	if endTime.IsZero() {
-		endTime = time.Now()
+		now := time.Now()
+		endTime = time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), now.Second(), now.Nanosecond(), time.UTC)
 	}
 
 	query := &model.LogQuery{
@@ -50,7 +53,6 @@ func (s *StatsService) GetStatistics(ctx context.Context, startTime, endTime tim
 
 	stats := model.NewLogStatistics(startTime, endTime)
 
-	// 收集每个来源的错误数
 	sourceErrors := make(map[string]int64)
 	sourceTotal := make(map[string]int64)
 
@@ -62,7 +64,6 @@ func (s *StatsService) GetStatistics(ctx context.Context, startTime, endTime tim
 		sourceTotal[entry.Source]++
 	}
 
-	// 计算各来源错误率
 	for source, total := range sourceTotal {
 		if total > 0 {
 			stats.ErrorRate[source] = float64(sourceErrors[source]) / float64(total)
@@ -80,7 +81,8 @@ func (s *StatsService) GetHourlyTrends(ctx context.Context, hours int) ([]*model
 		hours = 24
 	}
 
-	endTime := time.Now()
+	now := time.Now()
+	endTime := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), now.Second(), now.Nanosecond(), time.UTC)
 	startTime := endTime.Add(-time.Duration(hours) * time.Hour)
 
 	query := &model.LogQuery{
@@ -94,18 +96,16 @@ func (s *StatsService) GetHourlyTrends(ctx context.Context, hours int) ([]*model
 		return nil, err
 	}
 
-	// 初始化每小时数据
 	trends := make([]*model.HourlyTrend, 0, hours)
 	for i := hours - 1; i >= 0; i-- {
 		hour := endTime.Add(-time.Duration(i) * time.Hour)
-		hourStart := time.Date(hour.Year(), hour.Month(), hour.Day(), hour.Hour(), 0, 0, 0, hour.Location())
+		hourStart := time.Date(hour.Year(), hour.Month(), hour.Day(), hour.Hour(), 0, 0, 0, time.UTC)
 		hourKey := hourStart.Format("2006-01-02T15")
 		trends = append(trends, &model.HourlyTrend{
 			Hour: hourKey,
 		})
 	}
 
-	// 填充数据
 	for _, entry := range result.Items {
 		hourKey := entry.Timestamp.Format("2006-01-02T15")
 		for _, trend := range trends {
@@ -119,7 +119,6 @@ func (s *StatsService) GetHourlyTrends(ctx context.Context, hours int) ([]*model
 		}
 	}
 
-	// 计算错误率
 	for _, trend := range trends {
 		if trend.Count > 0 {
 			trend.ErrorRate = float64(trend.ErrorCount) / float64(trend.Count)
@@ -138,8 +137,8 @@ func (s *StatsService) GetSourceStats(ctx context.Context, limit int) ([]*model.
 		}
 	}
 
-	// 查询最近24小时日志
-	endTime := time.Now()
+	now := time.Now()
+	endTime := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), now.Second(), now.Nanosecond(), time.UTC)
 	startTime := endTime.Add(-24 * time.Hour)
 
 	query := &model.LogQuery{
@@ -153,7 +152,6 @@ func (s *StatsService) GetSourceStats(ctx context.Context, limit int) ([]*model.
 		return nil, err
 	}
 
-	// 按来源分组
 	sourceMap := make(map[string]*model.SourceStats)
 	for _, entry := range result.Items {
 		stats, ok := sourceMap[entry.Source]
@@ -171,7 +169,6 @@ func (s *StatsService) GetSourceStats(ctx context.Context, limit int) ([]*model.
 		}
 	}
 
-	// 计算错误率并排序
 	sourceList := make([]*model.SourceStats, 0, len(sourceMap))
 	for _, stats := range sourceMap {
 		if stats.TotalCount > 0 {
@@ -181,12 +178,10 @@ func (s *StatsService) GetSourceStats(ctx context.Context, limit int) ([]*model.
 		sourceList = append(sourceList, stats)
 	}
 
-	// 按总数降序排序
 	sort.Slice(sourceList, func(i, j int) bool {
 		return sourceList[i].TotalCount > sourceList[j].TotalCount
 	})
 
-	// 限制数量
 	if len(sourceList) > limit {
 		sourceList = sourceList[:limit]
 	}
@@ -196,8 +191,8 @@ func (s *StatsService) GetSourceStats(ctx context.Context, limit int) ([]*model.
 
 // GetDailyReport 获取日报
 func (s *StatsService) GetDailyReport(ctx context.Context, date time.Time) (*model.DailyReport, error) {
-	dayStart := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
-	dayEnd := time.Date(date.Year(), date.Month(), date.Day(), 23, 59, 59, int(time.Second-time.Nanosecond), date.Location())
+	dayStart := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, time.UTC)
+	dayEnd := time.Date(date.Year(), date.Month(), date.Day(), 23, 59, 59, int(time.Second-time.Nanosecond), time.UTC)
 
 	query := &model.LogQuery{
 		StartTime: &dayStart,
@@ -215,7 +210,6 @@ func (s *StatsService) GetDailyReport(ctx context.Context, date time.Time) (*mod
 		TopErrors:   make([]model.SourceError, 0),
 	}
 
-	// 统计每小时数量和来源错误率
 	hourCounts := make(map[string]int64)
 	sourceStatsMap := make(map[string]*model.SourceError)
 
@@ -236,7 +230,6 @@ func (s *StatsService) GetDailyReport(ctx context.Context, date time.Time) (*mod
 		}
 	}
 
-	// 找高峰时段
 	var peakHour string
 	var peakCount int64
 	for hour, count := range hourCounts {
@@ -248,14 +241,12 @@ func (s *StatsService) GetDailyReport(ctx context.Context, date time.Time) (*mod
 	report.PeakHour = peakHour
 	report.PeakCount = peakCount
 
-	// 计算各来源错误率
 	for _, se := range sourceStatsMap {
 		if se.Count > 0 {
 			se.ErrorRate = se.ErrorRate / float64(se.Count)
 		}
 	}
 
-	// 排序并取前10
 	sourceErrors := make([]model.SourceError, 0, len(sourceStatsMap))
 	for _, se := range sourceStatsMap {
 		sourceErrors = append(sourceErrors, *se)

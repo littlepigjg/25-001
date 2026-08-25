@@ -32,7 +32,8 @@ func (as *AggregationService) AggregateByHour(ctx context.Context, hours int) (m
 		hours = 24
 	}
 
-	endTime := time.Now()
+	now := time.Now()
+	endTime := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), now.Second(), now.Nanosecond(), time.UTC)
 	startTime := endTime.Add(-time.Duration(hours) * time.Hour)
 
 	query := &model.LogQuery{
@@ -103,7 +104,8 @@ func (as *AggregationService) GetTopSources(ctx context.Context, limit int) ([]m
 		limit = 10
 	}
 
-	endTime := time.Now()
+	now := time.Now()
+	endTime := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), now.Second(), now.Nanosecond(), time.UTC)
 	startTime := endTime.Add(-24 * time.Hour)
 
 	query := &model.LogQuery{
@@ -127,7 +129,6 @@ func (as *AggregationService) GetTopSources(ctx context.Context, limit int) ([]m
 		}
 	}
 
-	// 转换为排序切片
 	sources := make([]model.SourceError, 0, len(sourceCount))
 	for source, count := range sourceCount {
 		errorRate := float64(0)
@@ -141,7 +142,6 @@ func (as *AggregationService) GetTopSources(ctx context.Context, limit int) ([]m
 		})
 	}
 
-	// 排序
 	for i := 0; i < len(sources)-1; i++ {
 		for j := i + 1; j < len(sources); j++ {
 			if sources[i].Count < sources[j].Count {

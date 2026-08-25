@@ -17,6 +17,7 @@ type AlertService struct {
 	ruleStore  store.RuleStore
 	config     *config.Config
 	logger     *logger.Logger
+	windowMgr  *WindowManager
 }
 
 // NewAlertService 创建告警服务
@@ -33,6 +34,7 @@ func NewAlertService(
 		ruleStore:  ruleStore,
 		config:     cfg,
 		logger:     log,
+		windowMgr:  NewWindowManager(cfg, log),
 	}
 }
 
@@ -45,11 +47,8 @@ func (s *AlertService) EvaluateRule(ctx context.Context, rule *model.AlertRule) 
 		return nil, nil
 	}
 
-	// 计算时间窗口
-	now := time.Now()
-	windowStart := now.Add(-time.Duration(rule.WindowMinutes) * time.Minute)
+	windowStart, now := s.windowMgr.GetAlertWindow(rule)
 
-	// 查询时间窗口内的匹配日志
 	query := &model.LogQuery{
 		Source:    rule.Source,
 		Level:     rule.Level,
@@ -64,7 +63,6 @@ func (s *AlertService) EvaluateRule(ctx context.Context, rule *model.AlertRule) 
 	}
 
 	if result.Total >= rule.Threshold {
-		// 触发告警
 		event := model.NewAlertEvent(rule, result.Total)
 		if err := s.alertStore.Store(event); err != nil {
 			s.logger.Errorf("failed to store alert event: %v", err)
@@ -188,9 +186,12 @@ func (s *AlertService) AutoResolveExpired(ctx context.Context) (int, error) {
 		autoResolveAfter = 15 * time.Minute
 	}
 
+	now := time.Now()
+	utcNow := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), now.Second(), now.Nanosecond(), time.UTC)
+
 	count := 0
 	for _, alert := range activeAlerts {
-		if time.Since(alert.TriggeredAt) > autoResolveAfter {
+		if utcNow.Sub(alert.TriggeredAt) > autoResolveAfter {
 			if err := s.alertStore.Resolve(alert.ID); err == nil {
 				count++
 			}

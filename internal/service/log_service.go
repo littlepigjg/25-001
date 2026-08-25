@@ -142,13 +142,16 @@ func (s *LogService) CleanupLogs(ctx context.Context) (int64, error) {
 	if retentionPeriod <= 0 {
 		return 0, nil
 	}
+	now := time.Now()
+	cutoffTime := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), now.Second(), now.Nanosecond(), time.UTC)
+	cutoffTime = cutoffTime.Add(-retentionPeriod)
 	count, err := s.store.Cleanup(retentionPeriod)
 	if err != nil {
 		s.logger.Errorf("failed to cleanup logs: %v", err)
 		return 0, err
 	}
 	if count > 0 {
-		s.logger.Infof("logs cleaned up: count=%d", count)
+		s.logger.Infof("logs cleaned up: count=%d, cutoff=%v", count, cutoffTime)
 	}
 	return count, nil
 }
