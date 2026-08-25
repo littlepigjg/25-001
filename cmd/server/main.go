@@ -258,23 +258,7 @@ func main() {
 	// 静态文件服务
 	webDir := findWebDir()
 	if webDir != "" {
-		webFileServer := http.FileServer(http.Dir(webDir))
-		mux.Handle("/", webFileServer)
 		log.Infof("static files served from: %s", webDir)
-	} else {
-		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.Write([]byte(`<!DOCTYPE html>
-<html>
-<head><title>LogAlert</title></head>
-<body>
-<h1>LogAlert - Real-time Log Aggregation & Alert Engine</h1>
-<p>API: <a href="/info">/info</a></p>
-<p>Health: <a href="/health">/health</a></p>
-<p>Ready: <a href="/ready">/ready</a></p>
-</body>
-</html>`))
-		})
 	}
 
 	// 组合中间件

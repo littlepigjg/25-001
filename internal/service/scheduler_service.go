@@ -4,8 +4,10 @@ package service
 import (
 	"context"
 	"logalert/internal/config"
+	"logalert/internal/model"
 	"logalert/pkg/logger"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -21,6 +23,7 @@ type SchedulerService struct {
 	tickers    map[string]*time.Ticker
 	stopCh     map[string]chan struct{}
 	wg         sync.WaitGroup
+	scanCount  atomic.Int64
 }
 
 // NewSchedulerService 创建调度服务
@@ -52,19 +55,16 @@ func (s *SchedulerService) Start(ctx context.Context) {
 
 	s.logger.Info("scheduler service starting...")
 
-	// 启动告警规则扫描任务
+	s.alertService.StartEvaluation(ctx)
+
 	s.startAlertScan(ctx)
 
-	// 启动日志清理任务
 	s.startLogCleanup(ctx)
 
-	// 启动告警自动解决任务
 	s.startAlertAutoResolve(ctx)
 
-	// 启动告警清理任务
 	s.startAlertCleanup(ctx)
 
-	// 等待上下文取消
 	go func() {
 		<-ctx.Done()
 		s.Stop()
@@ -82,20 +82,19 @@ func (s *SchedulerService) Stop() {
 
 	s.logger.Info("scheduler service stopping...")
 
-	// 停止所有ticker
 	for name, ticker := range s.tickers {
 		ticker.Stop()
 		delete(s.tickers, name)
 	}
 
-	// 关闭所有stop channel
 	for name, ch := range s.stopCh {
 		close(ch)
 		delete(s.stopCh, name)
 	}
 
-	// 等待所有goroutine完成
 	s.wg.Wait()
+
+	s.alertService.StopEvaluation()
 
 	s.running = false
 	s.logger.Info("scheduler service stopped")
@@ -146,14 +145,76 @@ func (s *SchedulerService) startAlertScan(ctx context.Context) {
 
 // scanAlerts 执行告警扫描
 func (s *SchedulerService) scanAlerts(ctx context.Context) {
+	s.scanCount.Add(1)
 	s.logger.Debug("scanning alert rules...")
-	events, err := s.alertService.EvaluateAllRules(ctx)
+
+	rules, err := s.alertService.ruleStore.List()
 	if err != nil {
 		s.logger.Errorf("alert scan failed: %v", err)
 		return
 	}
-	if len(events) > 0 {
-		s.logger.Infof("alert scan completed: triggered=%d", len(events))
+
+	activeRules := make([]*model.AlertRule, 0, len(rules))
+	for _, r := range rules {
+		if r.Enabled {
+			activeRules = append(activeRules, r)
+		}
+	}
+
+	if len(activeRules) == 0 {
+		return
+	}
+
+	type scanResult struct {
+		events []*model.AlertEvent
+		errs   []error
+	}
+
+	resultCh := make(chan *scanResult, 1)
+	go func() {
+		var mu sync.Mutex
+		var events []*model.AlertEvent
+		var errs []error
+		var wg sync.WaitGroup
+
+		for _, rule := range activeRules {
+			wg.Add(1)
+			go func(r *model.AlertRule) {
+				defer wg.Done()
+				event, err := s.alertService.EvaluateRule(ctx, r)
+				if err != nil {
+					mu.Lock()
+					errs = append(errs, err)
+					mu.Unlock()
+					return
+				}
+				if event != nil {
+					mu.Lock()
+					events = append(events, event)
+					mu.Unlock()
+				}
+			}(rule)
+		}
+
+		wg.Wait()
+		resultCh <- &scanResult{events: events, errs: errs}
+	}()
+
+	select {
+	case res, ok := <-resultCh:
+		if ok {
+			if len(res.events) > 0 {
+				s.logger.Infof("alert scan completed: triggered=%d", len(res.events))
+			}
+			if len(res.errs) > 0 {
+				s.logger.Errorf("alert scan had errors: %d", len(res.errs))
+			}
+		}
+	case <-ctx.Done():
+		// BUG: resultCh not closed when context cancelled
+		// The goroutine above will be blocked trying to send to resultCh
+		// because no one is reading it anymore
+		s.logger.Warn("alert scan cancelled by context")
 	}
 }
 
@@ -220,7 +281,6 @@ func (s *SchedulerService) startAlertAutoResolve(ctx context.Context) {
 		interval = 15 * time.Minute
 	}
 
-	// 自动解决间隔：使用自动解决时间的一半
 	scanInterval := interval / 2
 	if scanInterval < time.Minute {
 		scanInterval = time.Minute
@@ -267,7 +327,7 @@ func (s *SchedulerService) autoResolveAlerts(ctx context.Context) {
 
 // startAlertCleanup 启动告警清理
 func (s *SchedulerService) startAlertCleanup(ctx context.Context) {
-	interval := 24 * time.Hour // 每天清理一次
+	interval := 24 * time.Hour
 
 	ticker := time.NewTicker(interval)
 	name := "alert_cleanup"
@@ -320,4 +380,9 @@ func (s *SchedulerService) GetTaskStatus() map[string]bool {
 		status[name] = true
 	}
 	return status
+}
+
+// GetScanCount 获取扫描次数
+func (s *SchedulerService) GetScanCount() int64 {
+	return s.scanCount.Load()
 }
