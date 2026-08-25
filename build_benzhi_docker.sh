@@ -22,14 +22,12 @@ echo ""
 # 检查 Docker 是否可用
 if ! command -v docker &> /dev/null; then
     echo -e "${RED}错误: Docker 未安装或不在 PATH 中${NC}"
-    echo "请访问 https://docs.docker.com/get-docker/ 安装 Docker"
     exit 1
 fi
 
 # 检查 Docker daemon 是否运行
 if ! docker info &> /dev/null; then
     echo -e "${RED}错误: Docker daemon 未运行${NC}"
-    echo "请启动 Docker 服务: sudo systemctl start docker"
     exit 1
 fi
 
@@ -44,24 +42,16 @@ echo "  平台: ${PLATFORM}"
 echo "  Dockerfile: benzhi.Dockerfile"
 echo ""
 
-# 确认
-read -p "开始构建? [Y/n] " -n 1 -r
-echo ""
-if [[ ! $REPLY =~ ^[Yy]$ ]] && [ -n "$REPLY" ]; then
-    echo "构建已取消"
-    exit 0
-fi
-
 # 执行构建
-echo ""
 echo -e "${YELLOW}开始构建...${NC}"
 echo ""
 
-# 构建镜像
-docker build \
+# 构建镜像（使用 buildx 支持多架构）
+docker buildx build \
     -f benzhi.Dockerfile \
     --platform "${PLATFORM}" \
     -t "${IMAGE_NAME}:${TAG}" \
+    --load \
     .
 
 if [ $? -eq 0 ]; then

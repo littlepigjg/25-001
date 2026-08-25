@@ -57,7 +57,7 @@ func (s *AlertService) EvaluateRule(ctx context.Context, rule *model.AlertRule) 
 		EndTime:   &now,
 	}
 
-	result, err := s.logStore.Query(query)
+	result, err := s.logStore.Query(ctx, query)
 	if err != nil {
 		s.logger.Errorf("failed to query logs for rule evaluation: %v", err)
 		return nil, err

@@ -2,6 +2,7 @@
 package store
 
 import (
+	"context"
 	"logalert/internal/model"
 	"time"
 )
@@ -15,7 +16,7 @@ type LogStore interface {
 	// GetByID 根据ID获取日志
 	GetByID(id string) (*model.LogEntry, error)
 	// Query 查询日志
-	Query(query *model.LogQuery) (*model.LogQueryResult, error)
+	Query(ctx context.Context, query *model.LogQuery) (*model.LogQueryResult, error)
 	// Count 统计数量
 	Count(source string, level model.LogLevel, startTime, endTime time.Time) (int64, error)
 	// DeleteByID 根据ID删除

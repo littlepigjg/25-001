@@ -105,7 +105,7 @@ func (s *LogService) QueryLogs(ctx context.Context, query *model.LogQuery) (*mod
 	if err := query.Validate(); err != nil {
 		return nil, err
 	}
-	return s.store.Query(query)
+	return s.store.Query(ctx, query)
 }
 
 // DeleteLog 删除日志
@@ -169,7 +169,7 @@ func (s *LogService) FilterByLevel(ctx context.Context, level model.LogLevel, li
 	query := model.DefaultLogQuery()
 	query.Level = level
 	query.Limit = limit
-	result, err := s.store.Query(query)
+	result, err := s.store.Query(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +181,7 @@ func (s *LogService) FilterBySource(ctx context.Context, source string, limit in
 	query := model.DefaultLogQuery()
 	query.Source = source
 	query.Limit = limit
-	result, err := s.store.Query(query)
+	result, err := s.store.Query(ctx, query)
 	if err != nil {
 		return nil, err
 	}

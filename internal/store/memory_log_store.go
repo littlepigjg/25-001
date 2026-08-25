@@ -2,6 +2,7 @@
 package store
 
 import (
+	"context"
 	"logalert/internal/model"
 	"sort"
 	"sync"
@@ -12,15 +13,12 @@ import (
 type MemoryLogStore struct {
 	mu      sync.RWMutex
 	entries map[string]*model.LogEntry
-	// 按时间排序的ID索引
-	timeIndex []string
-	// 按来源索引
-	sourceIndex map[string][]string
-	// 按级别索引
-	levelIndex map[model.LogLevel][]string
-	// 按关键词索引
+	timeIndex    []string
+	sourceIndex  map[string][]string
+	levelIndex   map[model.LogLevel][]string
 	keywordIndex map[string][]string
 	maxEntries   int
+	queryDelay   time.Duration
 }
 
 // NewMemoryLogStore 创建内存日志存储
@@ -29,13 +27,18 @@ func NewMemoryLogStore(maxEntries int) *MemoryLogStore {
 		maxEntries = 100000
 	}
 	return &MemoryLogStore{
-		entries:     make(map[string]*model.LogEntry),
-		timeIndex:   make([]string, 0),
-		sourceIndex: make(map[string][]string),
-		levelIndex:  make(map[model.LogLevel][]string),
+		entries:      make(map[string]*model.LogEntry),
+		timeIndex:    make([]string, 0),
+		sourceIndex:  make(map[string][]string),
+		levelIndex:   make(map[model.LogLevel][]string),
 		keywordIndex: make(map[string][]string),
-		maxEntries:  maxEntries,
+		maxEntries:   maxEntries,
 	}
+}
+
+// SetQuerySpeed 设置查询时每条记录的处理延迟（用于性能调优或测试）
+func (s *MemoryLogStore) SetQuerySpeed(perEntryDelay time.Duration) {
+	s.queryDelay = perEntryDelay
 }
 
 // Store 存储一条日志
@@ -53,25 +56,14 @@ func (s *MemoryLogStore) Store(entry *model.LogEntry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// 检查容量
 	if len(s.entries) >= s.maxEntries {
-		// 移除最旧的条目
 		s.evictOldest()
 	}
 
-	// 存储条目
 	s.entries[entry.ID] = entry
-
-	// 更新时间索引（保持排序）
 	s.insertTimeIndex(entry)
-
-	// 更新来源索引
 	s.sourceIndex[entry.Source] = append(s.sourceIndex[entry.Source], entry.ID)
-
-	// 更新级别索引
 	s.levelIndex[entry.Level] = append(s.levelIndex[entry.Level], entry.ID)
-
-	// 更新关键词索引
 	for _, kw := range entry.Keywords {
 		kw = normalizeKW(kw)
 		s.keywordIndex[kw] = append(s.keywordIndex[kw], entry.ID)
@@ -102,7 +94,7 @@ func (s *MemoryLogStore) GetByID(id string) (*model.LogEntry, error) {
 }
 
 // Query 查询日志
-func (s *MemoryLogStore) Query(query *model.LogQuery) (*model.LogQueryResult, error) {
+func (s *MemoryLogStore) Query(ctx context.Context, query *model.LogQuery) (*model.LogQueryResult, error) {
 	if query == nil {
 		query = model.DefaultLogQuery()
 	}
@@ -115,10 +107,11 @@ func (s *MemoryLogStore) Query(query *model.LogQuery) (*model.LogQueryResult, er
 
 	startTime, endTime := query.TimeRange()
 
-	// 收集匹配的ID
 	var matchingIDs []string
+	sourceAgg := make(map[string]int64)
+	levelAgg := make(map[model.LogLevel]int64)
+	hourAgg := make(map[string]int64)
 
-	// 从时间索引开始筛选（因为时间范围通常是最严格的过滤条件）
 	for _, id := range s.timeIndex {
 		entry, ok := s.entries[id]
 		if !ok {
@@ -142,12 +135,43 @@ func (s *MemoryLogStore) Query(query *model.LogQuery) (*model.LogQueryResult, er
 			}
 		}
 		matchingIDs = append(matchingIDs, id)
+
+		sourceAgg[entry.Source]++
+		levelAgg[entry.Level]++
+		hourKey := entry.Timestamp.Format("2006-01-02T15")
+		hourAgg[hourKey]++
+
+		if s.queryDelay > 0 {
+			time.Sleep(s.queryDelay)
+		}
 	}
 
-	// 构建结果
 	total := len(matchingIDs)
 
-	// 排序
+	sourceList := make([]string, 0, len(sourceAgg))
+	for source := range sourceAgg {
+		sourceList = append(sourceList, source)
+	}
+	sort.Strings(sourceList)
+
+	levelList := make([]model.LogLevel, 0, len(levelAgg))
+	for level := range levelAgg {
+		levelList = append(levelList, level)
+	}
+
+	hourList := make([]string, 0, len(hourAgg))
+	for hour := range hourAgg {
+		hourList = append(hourList, hour)
+	}
+	sort.Strings(hourList)
+
+	for _, src := range sourceList {
+		_ = sourceAgg[src]
+	}
+	for _, lvl := range levelList {
+		_ = levelAgg[lvl]
+	}
+
 	entries := make([]*model.LogEntry, 0, total)
 	for _, id := range matchingIDs {
 		if entry, ok := s.entries[id]; ok {
@@ -155,7 +179,6 @@ func (s *MemoryLogStore) Query(query *model.LogQuery) (*model.LogQueryResult, er
 		}
 	}
 
-	// 按时间排序
 	sort.Slice(entries, func(i, j int) bool {
 		if query.SortOrder == model.SortDescending {
 			return entries[i].Timestamp.After(entries[j].Timestamp)
@@ -163,7 +186,6 @@ func (s *MemoryLogStore) Query(query *model.LogQuery) (*model.LogQueryResult, er
 		return entries[i].Timestamp.Before(entries[j].Timestamp)
 	})
 
-	// 分页
 	if query.Offset > total {
 		query.Offset = total
 	}
@@ -298,13 +320,11 @@ func (s *MemoryLogStore) evictOldest() {
 
 // insertTimeIndex 插入时间索引（保持排序）
 func (s *MemoryLogStore) insertTimeIndex(entry *model.LogEntry) {
-	// 二分查找插入位置
 	pos := sort.Search(len(s.timeIndex), func(i int) bool {
 		e := s.entries[s.timeIndex[i]]
 		return e.Timestamp.After(entry.Timestamp)
 	})
 
-	// 插入
 	s.timeIndex = append(s.timeIndex, "")
 	copy(s.timeIndex[pos+1:], s.timeIndex[pos:])
 	s.timeIndex[pos] = entry.ID
@@ -312,7 +332,6 @@ func (s *MemoryLogStore) insertTimeIndex(entry *model.LogEntry) {
 
 // removeEntry 从索引中移除条目
 func (s *MemoryLogStore) removeEntry(entry *model.LogEntry) {
-	// 从时间索引移除
 	for i, id := range s.timeIndex {
 		if id == entry.ID {
 			s.timeIndex = append(s.timeIndex[:i], s.timeIndex[i+1:]...)
@@ -320,7 +339,6 @@ func (s *MemoryLogStore) removeEntry(entry *model.LogEntry) {
 		}
 	}
 
-	// 从来源索引移除
 	if ids, ok := s.sourceIndex[entry.Source]; ok {
 		for i, id := range ids {
 			if id == entry.ID {
@@ -333,7 +351,6 @@ func (s *MemoryLogStore) removeEntry(entry *model.LogEntry) {
 		}
 	}
 
-	// 从级别索引移除
 	if ids, ok := s.levelIndex[entry.Level]; ok {
 		for i, id := range ids {
 			if id == entry.ID {
@@ -346,7 +363,6 @@ func (s *MemoryLogStore) removeEntry(entry *model.LogEntry) {
 		}
 	}
 
-	// 从关键词索引移除
 	for _, kw := range entry.Keywords {
 		kw = normalizeKW(kw)
 		if ids, ok := s.keywordIndex[kw]; ok {

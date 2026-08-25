@@ -41,7 +41,7 @@ func (as *AggregationService) AggregateByHour(ctx context.Context, hours int) (m
 		Limit:     100000,
 	}
 
-	result, err := as.logStore.Query(query)
+	result, err := as.logStore.Query(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +63,7 @@ func (as *AggregationService) AggregateBySource(ctx context.Context, startTime, 
 		Limit:     100000,
 	}
 
-	result, err := as.logStore.Query(query)
+	result, err := as.logStore.Query(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +84,7 @@ func (as *AggregationService) AggregateByLevel(ctx context.Context, startTime, e
 		Limit:     100000,
 	}
 
-	result, err := as.logStore.Query(query)
+	result, err := as.logStore.Query(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +112,7 @@ func (as *AggregationService) GetTopSources(ctx context.Context, limit int) ([]m
 		Limit:     100000,
 	}
 
-	result, err := as.logStore.Query(query)
+	result, err := as.logStore.Query(ctx, query)
 	if err != nil {
 		return nil, err
 	}
