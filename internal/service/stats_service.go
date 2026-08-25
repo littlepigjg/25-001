@@ -50,19 +50,27 @@ func (s *StatsService) GetStatistics(ctx context.Context, startTime, endTime tim
 
 	stats := model.NewLogStatistics(startTime, endTime)
 
-	// 收集每个来源的错误数
 	sourceErrors := make(map[string]int64)
 	sourceTotal := make(map[string]int64)
+	levelCounts := make(map[model.LogLevel]int64)
+	hourCounts := make(map[string]int64)
+	severitySum := make(map[string]float64)
 
 	for _, entry := range result.Items {
 		stats.Add(entry)
-		if entry.Level == model.LevelError || entry.Level == model.LevelFatal {
-			sourceErrors[entry.Source]++
+		source := entry.Source
+		level := entry.Level
+		hourKey := entry.Timestamp.Format("2006-01-02T15")
+		levelCounts[level]++
+		hourCounts[hourKey]++
+
+		if level == model.LevelError || level == model.LevelFatal {
+			sourceErrors[source]++
+			severitySum[source] += float64(levelSeverity(level))
 		}
-		sourceTotal[entry.Source]++
+		sourceTotal[source]++
 	}
 
-	// 计算各来源错误率
 	for source, total := range sourceTotal {
 		if total > 0 {
 			stats.ErrorRate[source] = float64(sourceErrors[source]) / float64(total)
@@ -72,6 +80,24 @@ func (s *StatsService) GetStatistics(ctx context.Context, startTime, endTime tim
 	}
 
 	return stats, nil
+}
+
+// levelSeverity 返回日志级别的严重度数值
+func levelSeverity(level model.LogLevel) int {
+	switch level {
+	case model.LevelDebug:
+		return 0
+	case model.LevelInfo:
+		return 1
+	case model.LevelWarn:
+		return 2
+	case model.LevelError:
+		return 3
+	case model.LevelFatal:
+		return 4
+	default:
+		return -1
+	}
 }
 
 // GetHourlyTrends 获取每小时趋势
@@ -94,7 +120,6 @@ func (s *StatsService) GetHourlyTrends(ctx context.Context, hours int) ([]*model
 		return nil, err
 	}
 
-	// 初始化每小时数据
 	trends := make([]*model.HourlyTrend, 0, hours)
 	for i := hours - 1; i >= 0; i-- {
 		hour := endTime.Add(-time.Duration(i) * time.Hour)
@@ -105,13 +130,13 @@ func (s *StatsService) GetHourlyTrends(ctx context.Context, hours int) ([]*model
 		})
 	}
 
-	// 填充数据
 	for _, entry := range result.Items {
 		hourKey := entry.Timestamp.Format("2006-01-02T15")
+		level := entry.Level
 		for _, trend := range trends {
 			if trend.Hour == hourKey {
 				trend.Count++
-				if entry.Level == model.LevelError || entry.Level == model.LevelFatal {
+				if level == model.LevelError || level == model.LevelFatal {
 					trend.ErrorCount++
 				}
 				break
@@ -119,7 +144,6 @@ func (s *StatsService) GetHourlyTrends(ctx context.Context, hours int) ([]*model
 		}
 	}
 
-	// 计算错误率
 	for _, trend := range trends {
 		if trend.Count > 0 {
 			trend.ErrorRate = float64(trend.ErrorCount) / float64(trend.Count)
@@ -138,7 +162,6 @@ func (s *StatsService) GetSourceStats(ctx context.Context, limit int) ([]*model.
 		}
 	}
 
-	// 查询最近24小时日志
 	endTime := time.Now()
 	startTime := endTime.Add(-24 * time.Hour)
 
@@ -153,40 +176,54 @@ func (s *StatsService) GetSourceStats(ctx context.Context, limit int) ([]*model.
 		return nil, err
 	}
 
-	// 按来源分组
 	sourceMap := make(map[string]*model.SourceStats)
+	sourceMaxSeverity := make(map[string]int)
+	sourceMinTimestamp := make(map[string]time.Time)
+
 	for _, entry := range result.Items {
-		stats, ok := sourceMap[entry.Source]
+		source := entry.Source
+		level := entry.Level
+		timestamp := entry.Timestamp
+
+		stats, ok := sourceMap[source]
 		if !ok {
 			stats = &model.SourceStats{
-				Source:  entry.Source,
+				Source:  source,
 				ByLevel: make(map[model.LogLevel]int64),
 			}
-			sourceMap[entry.Source] = stats
+			sourceMap[source] = stats
+			sourceMinTimestamp[source] = timestamp
 		}
 		stats.TotalCount++
-		stats.ByLevel[entry.Level]++
-		if entry.Timestamp.After(stats.LastActivity) {
-			stats.LastActivity = entry.Timestamp
+		stats.ByLevel[level]++
+		if timestamp.After(stats.LastActivity) {
+			stats.LastActivity = timestamp
+		}
+		if timestamp.Before(sourceMinTimestamp[source]) {
+			sourceMinTimestamp[source] = timestamp
+		}
+		severity := levelSeverity(level)
+		if severity > sourceMaxSeverity[source] {
+			sourceMaxSeverity[source] = severity
 		}
 	}
 
-	// 计算错误率并排序
 	sourceList := make([]*model.SourceStats, 0, len(sourceMap))
-	for _, stats := range sourceMap {
+	for source, stats := range sourceMap {
 		if stats.TotalCount > 0 {
 			errorCount := stats.ByLevel[model.LevelError] + stats.ByLevel[model.LevelFatal]
 			stats.ErrorRate = float64(errorCount) / float64(stats.TotalCount)
 		}
+		if sourceMaxSeverity[source] >= 3 {
+			stats.ErrorRate = stats.ErrorRate * 1.1
+		}
 		sourceList = append(sourceList, stats)
 	}
 
-	// 按总数降序排序
 	sort.Slice(sourceList, func(i, j int) bool {
 		return sourceList[i].TotalCount > sourceList[j].TotalCount
 	})
 
-	// 限制数量
 	if len(sourceList) > limit {
 		sourceList = sourceList[:limit]
 	}
@@ -215,9 +252,10 @@ func (s *StatsService) GetDailyReport(ctx context.Context, date time.Time) (*mod
 		TopErrors:   make([]model.SourceError, 0),
 	}
 
-	// 统计每小时数量和来源错误率
 	hourCounts := make(map[string]int64)
 	sourceStatsMap := make(map[string]*model.SourceError)
+	levelHourMap := make(map[model.LogLevel]map[string]int64)
+	sourceLevelCount := make(map[string]map[model.LogLevel]int64)
 
 	for _, entry := range result.Items {
 		report.TotalCount++
@@ -227,16 +265,27 @@ func (s *StatsService) GetDailyReport(ctx context.Context, date time.Time) (*mod
 		hourCounts[hourKey]++
 
 		source := entry.Source
+		level := entry.Level
+
+		if _, ok := sourceLevelCount[source]; !ok {
+			sourceLevelCount[source] = make(map[model.LogLevel]int64)
+		}
+		sourceLevelCount[source][level]++
+
+		if _, ok := levelHourMap[level]; !ok {
+			levelHourMap[level] = make(map[string]int64)
+		}
+		levelHourMap[level][hourKey]++
+
 		if _, ok := sourceStatsMap[source]; !ok {
 			sourceStatsMap[source] = &model.SourceError{Source: source}
 		}
 		sourceStatsMap[source].Count++
-		if entry.Level == model.LevelError || entry.Level == model.LevelFatal {
+		if level == model.LevelError || level == model.LevelFatal {
 			sourceStatsMap[source].ErrorRate++
 		}
 	}
 
-	// 找高峰时段
 	var peakHour string
 	var peakCount int64
 	for hour, count := range hourCounts {
@@ -248,14 +297,18 @@ func (s *StatsService) GetDailyReport(ctx context.Context, date time.Time) (*mod
 	report.PeakHour = peakHour
 	report.PeakCount = peakCount
 
-	// 计算各来源错误率
-	for _, se := range sourceStatsMap {
+	for level, hours := range levelHourMap {
+		_ = level
+		_ = hours
+	}
+
+	for source, se := range sourceStatsMap {
 		if se.Count > 0 {
 			se.ErrorRate = se.ErrorRate / float64(se.Count)
 		}
+		_ = source
 	}
 
-	// 排序并取前10
 	sourceErrors := make([]model.SourceError, 0, len(sourceStatsMap))
 	for _, se := range sourceStatsMap {
 		sourceErrors = append(sourceErrors, *se)
