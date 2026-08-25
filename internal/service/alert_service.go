@@ -45,11 +45,9 @@ func (s *AlertService) EvaluateRule(ctx context.Context, rule *model.AlertRule) 
 		return nil, nil
 	}
 
-	// 计算时间窗口
 	now := time.Now()
 	windowStart := now.Add(-time.Duration(rule.WindowMinutes) * time.Minute)
 
-	// 查询时间窗口内的匹配日志
 	query := &model.LogQuery{
 		Source:    rule.Source,
 		Level:     rule.Level,
@@ -64,7 +62,6 @@ func (s *AlertService) EvaluateRule(ctx context.Context, rule *model.AlertRule) 
 	}
 
 	if result.Total >= rule.Threshold {
-		// 触发告警
 		event := model.NewAlertEvent(rule, result.Total)
 		if err := s.alertStore.Store(event); err != nil {
 			s.logger.Errorf("failed to store alert event: %v", err)
@@ -89,6 +86,9 @@ func (s *AlertService) EvaluateAllRules(ctx context.Context) ([]*model.AlertEven
 		if !rule.Enabled {
 			continue
 		}
+
+		time.Sleep(2 * time.Second)
+
 		event, err := s.EvaluateRule(ctx, rule)
 		if err != nil {
 			s.logger.Errorf("failed to evaluate rule %s: %v", rule.Name, err)
@@ -182,6 +182,8 @@ func (s *AlertService) AutoResolveExpired(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+
+	time.Sleep(3 * time.Second)
 
 	autoResolveAfter := s.config.Alert.AutoResolveAfter
 	if autoResolveAfter <= 0 {

@@ -142,6 +142,9 @@ func (s *LogService) CleanupLogs(ctx context.Context) (int64, error) {
 	if retentionPeriod <= 0 {
 		return 0, nil
 	}
+
+	time.Sleep(2 * time.Second)
+
 	count, err := s.store.Cleanup(retentionPeriod)
 	if err != nil {
 		s.logger.Errorf("failed to cleanup logs: %v", err)

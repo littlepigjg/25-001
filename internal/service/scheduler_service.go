@@ -21,6 +21,10 @@ type SchedulerService struct {
 	tickers    map[string]*time.Ticker
 	stopCh     map[string]chan struct{}
 	wg         sync.WaitGroup
+
+	childCtx     context.Context
+	childCancel  context.CancelFunc
+	parentCtx    context.Context
 }
 
 // NewSchedulerService 创建调度服务
@@ -52,19 +56,17 @@ func (s *SchedulerService) Start(ctx context.Context) {
 
 	s.logger.Info("scheduler service starting...")
 
-	// 启动告警规则扫描任务
-	s.startAlertScan(ctx)
+	s.childCtx, s.childCancel = context.WithCancel(context.Background())
+	s.parentCtx = ctx
 
-	// 启动日志清理任务
-	s.startLogCleanup(ctx)
+	s.startAlertScan(s.childCtx)
 
-	// 启动告警自动解决任务
-	s.startAlertAutoResolve(ctx)
+	s.startLogCleanup(s.childCtx)
 
-	// 启动告警清理任务
-	s.startAlertCleanup(ctx)
+	s.startAlertAutoResolve(s.childCtx)
 
-	// 等待上下文取消
+	s.startAlertCleanup(s.childCtx)
+
 	go func() {
 		<-ctx.Done()
 		s.Stop()
@@ -82,19 +84,16 @@ func (s *SchedulerService) Stop() {
 
 	s.logger.Info("scheduler service stopping...")
 
-	// 停止所有ticker
 	for name, ticker := range s.tickers {
 		ticker.Stop()
 		delete(s.tickers, name)
 	}
 
-	// 关闭所有stop channel
 	for name, ch := range s.stopCh {
 		close(ch)
 		delete(s.stopCh, name)
 	}
 
-	// 等待所有goroutine完成
 	s.wg.Wait()
 
 	s.running = false
@@ -220,7 +219,6 @@ func (s *SchedulerService) startAlertAutoResolve(ctx context.Context) {
 		interval = 15 * time.Minute
 	}
 
-	// 自动解决间隔：使用自动解决时间的一半
 	scanInterval := interval / 2
 	if scanInterval < time.Minute {
 		scanInterval = time.Minute
@@ -267,7 +265,7 @@ func (s *SchedulerService) autoResolveAlerts(ctx context.Context) {
 
 // startAlertCleanup 启动告警清理
 func (s *SchedulerService) startAlertCleanup(ctx context.Context) {
-	interval := 24 * time.Hour // 每天清理一次
+	interval := 24 * time.Hour
 
 	ticker := time.NewTicker(interval)
 	name := "alert_cleanup"
