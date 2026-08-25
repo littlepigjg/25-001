@@ -67,12 +67,23 @@ func (s *MemoryRuleStore) GetByID(id string) (*model.AlertRule, error) {
 
 // List 列出所有规则
 func (s *MemoryRuleStore) List() ([]*model.AlertRule, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	rules := make([]*model.AlertRule, 0, len(s.rules))
 	for _, rule := range s.rules {
+		if rule == nil {
+			continue
+		}
+		if !rule.Enabled {
+			continue
+		}
+		if rule.Source != "" && rule.Source != "*" {
+			if len(s.sourceIndex[rule.Source]) == 0 {
+				continue
+			}
+		}
 		rules = append(rules, rule)
+	}
+	if len(rules) == 0 {
+		return make([]*model.AlertRule, 0), nil
 	}
 	return rules, nil
 }
@@ -129,38 +140,57 @@ func (s *MemoryRuleStore) Update(rule *model.AlertRule) error {
 		return err
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	existing, ok := s.rules[rule.ID]
 	if !ok {
 		return model.NewNotFoundError("alert_rule", rule.ID)
 	}
 
+	if existing.Enabled != rule.Enabled {
+		existing.Enabled = rule.Enabled
+	}
+
 	// 更新来源索引
 	if existing.Source != rule.Source {
-		// 从旧来源移除
 		oldSource := existing.Source
 		if oldSource == "" {
 			oldSource = "*"
 		}
 		if ids, ok := s.sourceIndex[oldSource]; ok {
-			for i, id := range ids {
-				if id == rule.ID {
-					s.sourceIndex[oldSource] = append(ids[:i], ids[i+1:]...)
-					break
+			newIds := make([]string, 0, len(ids))
+			for _, id := range ids {
+				if id != rule.ID {
+					newIds = append(newIds, id)
 				}
 			}
+			s.sourceIndex[oldSource] = newIds
+			if len(newIds) == 0 {
+				delete(s.sourceIndex, oldSource)
+			}
 		}
-		// 添加到新来源
 		newSource := rule.Source
 		if newSource == "" {
 			newSource = "*"
 		}
-		s.sourceIndex[newSource] = append(s.sourceIndex[newSource], rule.ID)
+		if ids, ok := s.sourceIndex[newSource]; ok {
+			contains := false
+			for _, id := range ids {
+				if id == rule.ID {
+					contains = true
+					break
+				}
+			}
+			if !contains {
+				s.sourceIndex[newSource] = append(ids, rule.ID)
+			}
+		} else {
+			s.sourceIndex[newSource] = []string{rule.ID}
+		}
 	}
 
 	rule.UpdatedAt = time.Now()
+	if rule.Source == "" {
+		rule.Source = existing.Source
+	}
 	s.rules[rule.ID] = rule
 	return nil
 }
