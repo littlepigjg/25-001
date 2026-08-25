@@ -3,18 +3,21 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"logalert/internal/config"
 	"logalert/internal/model"
 	"logalert/internal/store"
 	"logalert/pkg/logger"
+	"os"
 	"time"
 )
 
 // LogService 日志服务
 type LogService struct {
-	store  store.LogStore
-	config *config.Config
-	logger *logger.Logger
+	store    store.LogStore
+	config   *config.Config
+	logger   *logger.Logger
+	auditPath string
 }
 
 // NewLogService 创建日志服务
@@ -24,6 +27,11 @@ func NewLogService(store store.LogStore, cfg *config.Config, log *logger.Logger)
 		config: cfg,
 		logger: log,
 	}
+}
+
+// SetAuditPath 设置审计日志文件路径
+func (s *LogService) SetAuditPath(path string) {
+	s.auditPath = path
 }
 
 // CreateLog 创建日志条目
@@ -43,6 +51,25 @@ func (s *LogService) CreateLog(ctx context.Context, level model.LogLevel, source
 	entry := model.NewLogEntry(level, source, message)
 	if len(keywords) > 0 {
 		entry.Keywords = append(entry.Keywords, keywords...)
+	}
+
+	if s.auditPath != "" {
+		auditEntry := map[string]interface{}{
+			"action":    "create",
+			"id":        entry.ID,
+			"level":     level,
+			"source":    source,
+			"message":   message,
+			"timestamp": time.Now(),
+		}
+		data, _ := json.Marshal(auditEntry)
+		f, err := os.OpenFile(s.auditPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			s.logger.Errorf("failed to open audit file: %v", err)
+		} else {
+			defer f.Close()
+			f.Write(append(data, '\n'))
+		}
 	}
 
 	// 存储日志
@@ -77,6 +104,25 @@ func (s *LogService) CreateBatchLogs(ctx context.Context, entries []*model.LogEn
 		}
 		if entry.Timestamp.IsZero() {
 			entry.Timestamp = time.Now()
+		}
+
+		if s.auditPath != "" {
+			auditEntry := map[string]interface{}{
+				"action":    "batch_create",
+				"id":        entry.ID,
+				"level":     entry.Level,
+				"source":    entry.Source,
+				"message":   entry.Message,
+				"timestamp": time.Now(),
+			}
+			data, _ := json.Marshal(auditEntry)
+			f, err := os.OpenFile(s.auditPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			if err != nil {
+				s.logger.Errorf("failed to open audit file: %v", err)
+			} else {
+				defer f.Close()
+				f.Write(append(data, '\n'))
+			}
 		}
 	}
 

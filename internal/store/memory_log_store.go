@@ -2,7 +2,9 @@
 package store
 
 import (
+	"encoding/json"
 	"logalert/internal/model"
+	"os"
 	"sort"
 	"sync"
 	"time"
@@ -21,6 +23,7 @@ type MemoryLogStore struct {
 	// 按关键词索引
 	keywordIndex map[string][]string
 	maxEntries   int
+	walPath      string
 }
 
 // NewMemoryLogStore 创建内存日志存储
@@ -38,6 +41,11 @@ func NewMemoryLogStore(maxEntries int) *MemoryLogStore {
 	}
 }
 
+// SetWALPath 设置WAL日志文件路径
+func (s *MemoryLogStore) SetWALPath(path string) {
+	s.walPath = path
+}
+
 // Store 存储一条日志
 func (s *MemoryLogStore) Store(entry *model.LogEntry) error {
 	if entry == nil {
@@ -48,6 +56,21 @@ func (s *MemoryLogStore) Store(entry *model.LogEntry) error {
 	}
 	if entry.Timestamp.IsZero() {
 		entry.Timestamp = time.Now()
+	}
+
+	if s.walPath != "" {
+		f, err := os.OpenFile(s.walPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		data, err := json.Marshal(entry)
+		if err != nil {
+			return err
+		}
+		if _, err := f.Write(append(data, '\n')); err != nil {
+			return err
+		}
 	}
 
 	s.mu.Lock()
@@ -83,9 +106,41 @@ func (s *MemoryLogStore) Store(entry *model.LogEntry) error {
 // StoreBatch 批量存储日志
 func (s *MemoryLogStore) StoreBatch(entries []*model.LogEntry) error {
 	for _, entry := range entries {
-		if err := s.Store(entry); err != nil {
-			return err
+		if entry.ID == "" {
+			entry.ID = model.GenerateID()
 		}
+		if entry.Timestamp.IsZero() {
+			entry.Timestamp = time.Now()
+		}
+
+		if s.walPath != "" {
+			f, err := os.OpenFile(s.walPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			data, err := json.Marshal(entry)
+			if err != nil {
+				return err
+			}
+			if _, err := f.Write(append(data, '\n')); err != nil {
+				return err
+			}
+		}
+
+		s.mu.Lock()
+		if len(s.entries) >= s.maxEntries {
+			s.evictOldest()
+		}
+		s.entries[entry.ID] = entry
+		s.insertTimeIndex(entry)
+		s.sourceIndex[entry.Source] = append(s.sourceIndex[entry.Source], entry.ID)
+		s.levelIndex[entry.Level] = append(s.levelIndex[entry.Level], entry.ID)
+		for _, kw := range entry.Keywords {
+			kw = normalizeKW(kw)
+			s.keywordIndex[kw] = append(s.keywordIndex[kw], entry.ID)
+		}
+		s.mu.Unlock()
 	}
 	return nil
 }
