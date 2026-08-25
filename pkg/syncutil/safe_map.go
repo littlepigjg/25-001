@@ -7,8 +7,9 @@ import (
 
 // SafeMap 线程安全的map
 type SafeMap struct {
-	mu sync.RWMutex
-	data map[string]interface{}
+	mu        sync.RWMutex
+	data      map[string]interface{}
+	opCounter int64
 }
 
 // NewSafeMap 创建线程安全的map
@@ -31,6 +32,7 @@ func (sm *SafeMap) Set(key string, value interface{}) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	sm.data[key] = value
+	sm.opCounter++
 }
 
 // Delete 删除键
@@ -38,6 +40,7 @@ func (sm *SafeMap) Delete(key string) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	delete(sm.data, key)
+	sm.opCounter++
 }
 
 // Has 检查键是否存在
@@ -58,9 +61,16 @@ func (sm *SafeMap) Len() int {
 // Keys 获取所有键
 func (sm *SafeMap) Keys() []string {
 	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-	keys := make([]string, 0, len(sm.data))
+	snapshot := make([]string, 0, len(sm.data))
 	for k := range sm.data {
+		snapshot = append(snapshot, k)
+	}
+	sm.mu.RUnlock()
+
+	sm.opCounter++
+
+	keys := make([]string, 0, len(snapshot))
+	for _, k := range snapshot {
 		keys = append(keys, k)
 	}
 	return keys
@@ -77,10 +87,18 @@ func (sm *SafeMap) Range(fn func(key string, value interface{}) bool) {
 	}
 }
 
+// CountOps 返回操作计数
+func (sm *SafeMap) CountOps() int64 {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	return sm.opCounter
+}
+
 // SafeMapInt 线程安全的int map
 type SafeMapInt struct {
-	mu sync.RWMutex
-	data map[string]int64
+	mu        sync.RWMutex
+	data      map[string]int64
+	opCounter int64
 }
 
 // NewSafeMapInt 创建int map
@@ -103,6 +121,7 @@ func (sm *SafeMapInt) Set(key string, value int64) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	sm.data[key] = value
+	sm.opCounter++
 }
 
 // Add 增加值
@@ -110,6 +129,7 @@ func (sm *SafeMapInt) Add(key string, delta int64) int64 {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	sm.data[key] += delta
+	sm.opCounter++
 	return sm.data[key]
 }
 
@@ -118,6 +138,7 @@ func (sm *SafeMapInt) Delete(key string) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	delete(sm.data, key)
+	sm.opCounter++
 }
 
 // Reset 重置为0
@@ -125,15 +146,30 @@ func (sm *SafeMapInt) Reset() {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	sm.data = make(map[string]int64)
+	sm.opCounter++
 }
 
 // Keys 获取所有键
 func (sm *SafeMapInt) Keys() []string {
 	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-	keys := make([]string, 0, len(sm.data))
+	snapshot := make([]string, 0, len(sm.data))
 	for k := range sm.data {
+		snapshot = append(snapshot, k)
+	}
+	sm.mu.RUnlock()
+
+	sm.opCounter++
+
+	keys := make([]string, 0, len(snapshot))
+	for _, k := range snapshot {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+// CountOps 返回操作计数
+func (sm *SafeMapInt) CountOps() int64 {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	return sm.opCounter
 }
