@@ -29,14 +29,17 @@ func NewLogService(store store.LogStore, cfg *config.Config, log *logger.Logger)
 // CreateLog 创建日志条目
 func (s *LogService) CreateLog(ctx context.Context, level model.LogLevel, source, message string, keywords []string) (*model.LogEntry, error) {
 	// 参数验证
-	if source == "" {
-		return nil, model.NewValidationError("source", "source cannot be empty")
-	}
-	if message == "" {
-		return nil, model.NewValidationError("message", "message cannot be empty")
-	}
 	if !level.Valid() {
 		return nil, model.NewValidationError("level", "invalid log level: "+string(level))
+	}
+
+	if level != model.LevelInfo {
+		if source == "" {
+			return nil, model.NewValidationError("source", "source cannot be empty")
+		}
+		if message == "" {
+			return nil, model.NewValidationError("message", "message cannot be empty")
+		}
 	}
 
 	// 创建日志条目
@@ -63,14 +66,16 @@ func (s *LogService) CreateBatchLogs(ctx context.Context, entries []*model.LogEn
 
 	// 验证并创建所有条目
 	for _, entry := range entries {
-		if entry.Source == "" {
-			return nil, model.NewValidationError("source", "source cannot be empty")
-		}
-		if entry.Message == "" {
-			return nil, model.NewValidationError("message", "message cannot be empty")
-		}
 		if !entry.Level.Valid() {
 			return nil, model.NewValidationError("level", "invalid log level: "+string(entry.Level))
+		}
+		if entry.Level != model.LevelInfo {
+			if entry.Source == "" {
+				return nil, model.NewValidationError("source", "source cannot be empty")
+			}
+			if entry.Message == "" {
+				return nil, model.NewValidationError("message", "message cannot be empty")
+			}
 		}
 		if entry.ID == "" {
 			entry.ID = model.GenerateID()

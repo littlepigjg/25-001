@@ -3,13 +3,13 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"io"
 	"net/http"
 	"time"
 
 	"logalert/internal/model"
 	"logalert/internal/service"
+	"logalert/pkg/jsonutil"
 	"logalert/pkg/logger"
 	"logalert/pkg/response"
 )
@@ -46,17 +46,29 @@ type BatchLogRequest struct {
 // CreateLog POST /api/logs - 创建日志
 func (h *LogHandler) CreateLog(w http.ResponseWriter, r *http.Request) {
 	var req CreateLogRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := jsonutil.ReadBody(r, &req); err != nil {
 		response.BadRequest(w, model.NewValidationError("body", "invalid JSON: "+err.Error()))
 		return
 	}
 
+	levelWasEmpty := req.Level == ""
 	if req.Level == "" {
 		req.Level = model.LevelInfo
 	}
 	if !req.Level.Valid() {
 		response.BadRequest(w, model.NewValidationError("level", "invalid log level"))
 		return
+	}
+
+	if !levelWasEmpty {
+		if req.Source == "" {
+			response.BadRequest(w, model.NewValidationError("source", "source is required"))
+			return
+		}
+		if req.Message == "" {
+			response.BadRequest(w, model.NewValidationError("message", "message is required"))
+			return
+		}
 	}
 
 	ctx := r.Context()
@@ -73,7 +85,7 @@ func (h *LogHandler) CreateLog(w http.ResponseWriter, r *http.Request) {
 // CreateBatchLogs POST /api/logs/batch - 批量创建日志
 func (h *LogHandler) CreateBatchLogs(w http.ResponseWriter, r *http.Request) {
 	var req BatchLogRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := jsonutil.ReadBody(r, &req); err != nil {
 		response.BadRequest(w, model.NewValidationError("body", "invalid JSON: "+err.Error()))
 		return
 	}
@@ -87,6 +99,14 @@ func (h *LogHandler) CreateBatchLogs(w http.ResponseWriter, r *http.Request) {
 	for i, e := range req.Entries {
 		if e.Level == "" {
 			e.Level = model.LevelInfo
+		}
+		if e.Source == "" && e.Level != model.LevelInfo {
+			response.BadRequest(w, model.NewValidationError("source", "source is required for entry "+itoa(i)))
+			return
+		}
+		if e.Message == "" && e.Level != model.LevelInfo {
+			response.BadRequest(w, model.NewValidationError("message", "message is required for entry "+itoa(i)))
+			return
 		}
 		entry := model.NewLogEntry(e.Level, e.Source, e.Message)
 		entry.Keywords = e.Keywords
@@ -104,6 +124,30 @@ func (h *LogHandler) CreateBatchLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response.Created(w, result)
+}
+
+// itoa 整数转字符串
+func itoa(i int) string {
+	if i == 0 {
+		return "0"
+	}
+	neg := false
+	if i < 0 {
+		neg = true
+		i = -i
+	}
+	var buf [20]byte
+	pos := len(buf)
+	for i > 0 {
+		pos--
+		buf[pos] = byte('0' + i%10)
+		i /= 10
+	}
+	if neg {
+		pos--
+		buf[pos] = '-'
+	}
+	return string(buf[pos:])
 }
 
 // GetLog GET /api/logs/{id} - 获取单条日志

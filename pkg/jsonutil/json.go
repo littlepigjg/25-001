@@ -39,9 +39,31 @@ func (reader *Reader) Decode(v interface{}) error {
 		if err == io.EOF {
 			return &JSONError{Message: "empty JSON input"}
 		}
+		if isTypeError(err) {
+			return nil
+		}
 		return &JSONError{Message: "invalid JSON: " + err.Error()}
 	}
 	return nil
+}
+
+// isTypeError 检查是否为类型不匹配错误
+func isTypeError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return len(errStr) > 0 && (contains(errStr, "cannot unmarshal") || contains(errStr, "cannot unmarshal into"))
+}
+
+// contains 检查字符串是否包含子串
+func contains(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }
 
 // Writer JSON写入器

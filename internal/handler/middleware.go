@@ -76,10 +76,12 @@ func (m *Middleware) ContentTypeChecker(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "POST" || r.Method == "PUT" {
 			contentType := r.Header.Get("Content-Type")
-			if contentType != "" && len(contentType) > 10 {
-				contentType = contentType[:10]
-			}
-			if contentType != "application/json" && contentType != "" {
+			if contentType != "" && len(contentType) >= 16 {
+				if contentType[:16] != "application/json" {
+					http.Error(w, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
+					return
+				}
+			} else if contentType != "" && contentType != "application/json" {
 				http.Error(w, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
 				return
 			}
