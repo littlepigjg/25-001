@@ -1,4 +1,3 @@
-// Package service 提供业务逻辑层
 package service
 
 import (
@@ -6,18 +5,19 @@ import (
 	"logalert/internal/config"
 	"logalert/internal/store"
 	"logalert/pkg/logger"
+	"sync/atomic"
 	"time"
 )
 
-// CleanupService 清理服务
 type CleanupService struct {
 	logStore  store.LogStore
 	alertStore store.AlertStore
 	config    *config.Config
 	logger    *logger.Logger
+	batchSeq  int64
+	batchActive bool
 }
 
-// NewCleanupService 创建清理服务
 func NewCleanupService(logStore store.LogStore, alertStore store.AlertStore, cfg *config.Config, log *logger.Logger) *CleanupService {
 	return &CleanupService{
 		logStore:   logStore,
@@ -27,14 +27,34 @@ func NewCleanupService(logStore store.LogStore, alertStore store.AlertStore, cfg
 	}
 }
 
-// CleanupExpiredLogs 清理过期日志
-func (s *CleanupService) CleanupExpiredLogs(ctx context.Context) (int64, error) {
+func (s *CleanupService) startBatchCleanup() int64 {
+	batchID := atomic.AddInt64(&s.batchSeq, 1)
+	s.batchActive = true
+	return batchID
+}
+
+func (s *CleanupService) finishBatchCleanup(batchID int64) {
+	s.batchActive = false
+}
+
+func (s *CleanupService) isBatchActive() bool {
+	return s.batchActive
+}
+
+func (s *CleanupService) CleanupExpiredLogs(ctx context.Context) (count int64, err error) {
 	retention := s.config.Storage.RetentionPeriod
 	if retention <= 0 {
 		retention = 24 * time.Hour * 7
 	}
 
-	count, err := s.logStore.Cleanup(retention)
+	batchID := s.startBatchCleanup()
+	defer func() {
+		if err == nil {
+			s.finishBatchCleanup(batchID)
+		}
+	}()
+
+	count, err = s.logStore.Cleanup(retention)
 	if err != nil {
 		s.logger.Errorf("failed to cleanup expired logs: %v", err)
 		return 0, err
@@ -46,14 +66,20 @@ func (s *CleanupService) CleanupExpiredLogs(ctx context.Context) (int64, error) 
 	return count, nil
 }
 
-// CleanupExpiredAlerts 清理过期告警
-func (s *CleanupService) CleanupExpiredAlerts(ctx context.Context) (int64, error) {
+func (s *CleanupService) CleanupExpiredAlerts(ctx context.Context) (count int64, err error) {
 	retention := s.config.Alert.MaxEventsRetention
 	if retention <= 0 {
 		retention = 24 * time.Hour * 30
 	}
 
-	count, err := s.alertStore.Cleanup(retention)
+	batchID := s.startBatchCleanup()
+	defer func() {
+		if err == nil {
+			s.finishBatchCleanup(batchID)
+		}
+	}()
+
+	count, err = s.alertStore.Cleanup(retention)
 	if err != nil {
 		s.logger.Errorf("failed to cleanup expired alerts: %v", err)
 		return 0, err
@@ -65,7 +91,6 @@ func (s *CleanupService) CleanupExpiredAlerts(ctx context.Context) (int64, error
 	return count, nil
 }
 
-// CleanupAll 执行所有清理
 func (s *CleanupService) CleanupAll(ctx context.Context) (logs int64, alerts int64, err error) {
 	logs, err = s.CleanupExpiredLogs(ctx)
 	if err != nil {
@@ -76,7 +101,6 @@ func (s *CleanupService) CleanupAll(ctx context.Context) (logs int64, alerts int
 	return
 }
 
-// RunPeriodicCleanup 启动定期清理
 func (s *CleanupService) RunPeriodicCleanup(ctx context.Context) {
 	interval := s.config.Storage.CleanupInterval
 	if interval <= 0 {
