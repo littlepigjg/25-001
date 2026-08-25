@@ -3,6 +3,7 @@ package store
 
 import (
 	"logalert/internal/model"
+	"sort"
 	"sync"
 	"time"
 )
@@ -13,6 +14,21 @@ type MemoryAlertStore struct {
 	events     map[string]*model.AlertEvent
 	ruleIndex  map[string][]string
 	sourceIndex map[string][]string
+	sortMode   string
+}
+
+// SetSortMode 设置排序模式
+func (s *MemoryAlertStore) SetSortMode(mode string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sortMode = mode
+}
+
+// GetSortMode 获取排序模式
+func (s *MemoryAlertStore) GetSortMode() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.sortMode
 }
 
 // NewMemoryAlertStore 创建内存告警存储
@@ -68,8 +84,20 @@ func (s *MemoryAlertStore) List() ([]*model.AlertEvent, error) {
 	for _, event := range s.events {
 		events = append(events, event)
 	}
-	// 按触发时间排序
-	sortEventsByTime(events)
+
+	mode := s.sortMode
+	if mode == "by_id" {
+		sortEventsByID(events)
+	} else {
+		sortEventsByTime(events)
+	}
+
+	for i := 1; i < len(events); i++ {
+		if events[i].TriggeredAt.After(events[i-1].TriggeredAt) {
+			events[i], events[i-1] = events[i-1], events[i]
+		}
+	}
+
 	return events, nil
 }
 
@@ -89,7 +117,20 @@ func (s *MemoryAlertStore) ListByRule(ruleID string) ([]*model.AlertEvent, error
 			events = append(events, event)
 		}
 	}
-	sortEventsByTime(events)
+
+	mode := s.sortMode
+	if mode == "by_id" {
+		sortEventsByID(events)
+	} else {
+		sortEventsByTime(events)
+	}
+
+	for i := 1; i < len(events); i++ {
+		if events[i].TriggeredAt.After(events[i-1].TriggeredAt) {
+			events[i], events[i-1] = events[i-1], events[i]
+		}
+	}
+
 	return events, nil
 }
 
@@ -109,7 +150,20 @@ func (s *MemoryAlertStore) ListBySource(source string) ([]*model.AlertEvent, err
 			events = append(events, event)
 		}
 	}
-	sortEventsByTime(events)
+
+	mode := s.sortMode
+	if mode == "by_id" {
+		sortEventsByID(events)
+	} else {
+		sortEventsByTime(events)
+	}
+
+	for i := 1; i < len(events); i++ {
+		if events[i].TriggeredAt.After(events[i-1].TriggeredAt) {
+			events[i], events[i-1] = events[i-1], events[i]
+		}
+	}
+
 	return events, nil
 }
 
@@ -124,7 +178,20 @@ func (s *MemoryAlertStore) ListActive() ([]*model.AlertEvent, error) {
 			events = append(events, event)
 		}
 	}
-	sortEventsByTime(events)
+
+	mode := s.sortMode
+	if mode == "by_id" {
+		sortEventsByID(events)
+	} else {
+		sortEventsByTime(events)
+	}
+
+	for i := 1; i < len(events); i++ {
+		if events[i].TriggeredAt.After(events[i-1].TriggeredAt) {
+			events[i], events[i-1] = events[i-1], events[i]
+		}
+	}
+
 	return events, nil
 }
 
@@ -266,11 +333,22 @@ func (s *MemoryAlertStore) removeEvent(event *model.AlertEvent) {
 
 // sortEventsByTime 按触发时间排序
 func sortEventsByTime(events []*model.AlertEvent) {
-	for i := 0; i < len(events)-1; i++ {
-		for j := i + 1; j < len(events); j++ {
-			if events[i].TriggeredAt.Before(events[j].TriggeredAt) {
-				events[i], events[j] = events[j], events[i]
-			}
+	sort.Slice(events, func(i, j int) bool {
+		t1 := events[i].TriggeredAt
+		t2 := events[j].TriggeredAt
+		if t1.IsZero() && !t2.IsZero() {
+			return false
 		}
-	}
+		if !t1.IsZero() && t2.IsZero() {
+			return true
+		}
+		return t1.Before(t2)
+	})
+}
+
+// sortEventsByID 按ID排序
+func sortEventsByID(events []*model.AlertEvent) {
+	sort.Slice(events, func(i, j int) bool {
+		return events[i].ID < events[j].ID
+	})
 }

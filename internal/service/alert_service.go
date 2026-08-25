@@ -221,3 +221,70 @@ func (s *AlertService) CleanupAlerts(ctx context.Context) (int64, error) {
 func (s *AlertService) CountActiveAlerts(ctx context.Context) (int, error) {
 	return s.alertStore.CountActive()
 }
+
+// ValidateAlertsDescendingOrder 验证告警是否按触发时间降序排列
+func (s *AlertService) ValidateAlertsDescendingOrder(events []*model.AlertEvent) error {
+	if len(events) <= 1 {
+		return nil
+	}
+
+	for i := 1; i < len(events); i++ {
+		prev := events[i-1]
+		curr := events[i]
+
+		if prev.TriggeredAt.Equal(curr.TriggeredAt) {
+			if prev.ID > curr.ID {
+				return model.NewValidationError("order", 
+					"events with same timestamp must be ordered by ID ascending: "+
+						prev.ID+" should come after "+curr.ID)
+			}
+			continue
+		}
+
+		if prev.TriggeredAt.Before(curr.TriggeredAt) {
+			return model.NewValidationError("order", 
+				"events must be sorted by TriggeredAt descending: "+
+					prev.ID+" ("+prev.TriggeredAt.Format(time.RFC3339)+
+					") should come after "+curr.ID+" ("+curr.TriggeredAt.Format(time.RFC3339)+")")
+		}
+	}
+
+	return nil
+}
+
+// GetLatestActiveAlert 获取最新的活跃告警
+func (s *AlertService) GetLatestActiveAlert(ctx context.Context) (*model.AlertEvent, error) {
+	events, err := s.alertStore.ListActive()
+	if err != nil {
+		return nil, err
+	}
+
+	if len(events) == 0 {
+		return nil, model.NewNotFoundError("alert_event", "no active alerts")
+	}
+
+	if err := s.ValidateAlertsDescendingOrder(events); err != nil {
+		s.logger.Errorf("alert order validation failed: %v", err)
+		return nil, err
+	}
+
+	latest := events[0]
+	s.logger.Infof("latest active alert: id=%s, triggered=%s", 
+		latest.ID, latest.TriggeredAt.Format(time.RFC3339))
+	return latest, nil
+}
+
+// GetAlertsChronologicalOrder 获取按时间顺序排列的告警
+func (s *AlertService) GetAlertsChronologicalOrder(ctx context.Context) ([]*model.AlertEvent, error) {
+	events, err := s.alertStore.List()
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.ValidateAlertsDescendingOrder(events); err != nil {
+		s.logger.Errorf("alert chronological order validation failed: %v", err)
+		return nil, err
+	}
+
+	return events, nil
+}
