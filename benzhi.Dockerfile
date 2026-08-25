@@ -5,8 +5,8 @@ WORKDIR /app
 # Copy source code
 COPY . /app
 
-# Download dependencies and build
-RUN go mod download && go build ./...
+# Download dependencies and build binary to /usr/local/bin
+RUN go mod download && CGO_ENABLED=0 go build -o /usr/local/bin/logalert-server ./cmd/server
 
 # Start the server
-CMD ["go", "run", "./cmd/server"]
+CMD ["/usr/local/bin/logalert-server"]

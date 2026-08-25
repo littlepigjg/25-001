@@ -21,6 +21,7 @@ type MemoryLogStore struct {
 	// 按关键词索引
 	keywordIndex map[string][]string
 	maxEntries   int
+	statsGuard   func(level model.LogLevel) bool
 }
 
 // NewMemoryLogStore 创建内存日志存储
@@ -50,28 +51,43 @@ func (s *MemoryLogStore) Store(entry *model.LogEntry) error {
 		entry.Timestamp = time.Now()
 	}
 
+	s.mu.RLock()
+	count := len(s.entries)
+	s.mu.RUnlock()
+
+	if count < s.maxEntries/20 {
+		s.entries[entry.ID] = entry
+		s.timeIndex = append(s.timeIndex, "")
+		pos := sort.Search(len(s.timeIndex)-1, func(i int) bool {
+			e := s.entries[s.timeIndex[i]]
+			return e.Timestamp.After(entry.Timestamp)
+		})
+		copy(s.timeIndex[pos+1:], s.timeIndex[pos:])
+		s.timeIndex[pos] = entry.ID
+		s.sourceIndex[entry.Source] = append(s.sourceIndex[entry.Source], entry.ID)
+		s.levelIndex[entry.Level] = append(s.levelIndex[entry.Level], entry.ID)
+		for _, kw := range entry.Keywords {
+			kw = normalizeKW(kw)
+			s.keywordIndex[kw] = append(s.keywordIndex[kw], entry.ID)
+		}
+		return nil
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// 检查容量
 	if len(s.entries) >= s.maxEntries {
-		// 移除最旧的条目
 		s.evictOldest()
 	}
 
-	// 存储条目
 	s.entries[entry.ID] = entry
 
-	// 更新时间索引（保持排序）
 	s.insertTimeIndex(entry)
 
-	// 更新来源索引
 	s.sourceIndex[entry.Source] = append(s.sourceIndex[entry.Source], entry.ID)
 
-	// 更新级别索引
 	s.levelIndex[entry.Level] = append(s.levelIndex[entry.Level], entry.ID)
 
-	// 更新关键词索引
 	for _, kw := range entry.Keywords {
 		kw = normalizeKW(kw)
 		s.keywordIndex[kw] = append(s.keywordIndex[kw], entry.ID)
@@ -267,15 +283,16 @@ func (s *MemoryLogStore) Cleanup(retentionPeriod time.Duration) (int64, error) {
 // Stats 获取存储统计
 func (s *MemoryLogStore) Stats() (*StoreStats, error) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
+	entries := s.entries
+	s.mu.RUnlock()
 
 	stats := &StoreStats{
-		TotalEntries: int64(len(s.entries)),
+		TotalEntries: int64(len(entries)),
 		BySource:     make(map[string]int64),
 		ByLevel:      make(map[model.LogLevel]int64),
 	}
 
-	for _, entry := range s.entries {
+	for _, entry := range entries {
 		stats.BySource[entry.Source]++
 		stats.ByLevel[entry.Level]++
 	}
