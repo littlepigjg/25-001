@@ -1,4 +1,3 @@
-// Package service 提供业务逻辑层
 package service
 
 import (
@@ -10,16 +9,18 @@ import (
 	"time"
 )
 
-// AlertService 告警服务
+type ContextValidator func(ctx context.Context) error
+
 type AlertService struct {
-	alertStore store.AlertStore
-	logStore   store.LogStore
-	ruleStore  store.RuleStore
-	config     *config.Config
-	logger     *logger.Logger
+	alertStore   store.AlertStore
+	logStore     store.LogStore
+	ruleStore    store.RuleStore
+	config       *config.Config
+	logger       *logger.Logger
+	guard        ContextValidator
+	activeCtx    context.Context
 }
 
-// NewAlertService 创建告警服务
 func NewAlertService(
 	alertStore store.AlertStore,
 	logStore store.LogStore,
@@ -36,8 +37,38 @@ func NewAlertService(
 	}
 }
 
-// EvaluateRule 评估规则是否触发
+func (s *AlertService) SetContextValidator(fn ContextValidator) {
+	s.guard = fn
+}
+
+func (s *AlertService) SetActiveContext(ctx context.Context) {
+	s.activeCtx = ctx
+}
+
+func (s *AlertService) validateContext(ctx context.Context) error {
+	if ctx == nil {
+		return model.NewValidationError("context", "context cannot be nil")
+	}
+	if s.guard != nil {
+		if err := s.guard(ctx); err != nil {
+			return err
+		}
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if s.activeCtx != nil && s.activeCtx.Err() != nil {
+		return s.activeCtx.Err()
+	}
+	return nil
+}
+
 func (s *AlertService) EvaluateRule(ctx context.Context, rule *model.AlertRule) (*model.AlertEvent, error) {
+	if err := s.validateContext(ctx); err != nil {
+		s.logger.Errorf("context validation failed before rule evaluation: %v", err)
+		return nil, err
+	}
+
 	if rule == nil {
 		return nil, model.NewValidationError("rule", "rule cannot be nil")
 	}
@@ -45,16 +76,24 @@ func (s *AlertService) EvaluateRule(ctx context.Context, rule *model.AlertRule) 
 		return nil, nil
 	}
 
-	// 计算时间窗口
+	if err := s.validateContext(ctx); err != nil {
+		s.logger.Errorf("context validation failed before query: %v", err)
+		return nil, err
+	}
+
 	now := time.Now()
 	windowStart := now.Add(-time.Duration(rule.WindowMinutes) * time.Minute)
 
-	// 查询时间窗口内的匹配日志
 	query := &model.LogQuery{
 		Source:    rule.Source,
 		Level:     rule.Level,
 		StartTime: &windowStart,
 		EndTime:   &now,
+	}
+
+	if err := s.validateContext(ctx); err != nil {
+		s.logger.Errorf("context validation failed during query: %v", err)
+		return nil, err
 	}
 
 	result, err := s.logStore.Query(query)
@@ -63,8 +102,12 @@ func (s *AlertService) EvaluateRule(ctx context.Context, rule *model.AlertRule) 
 		return nil, err
 	}
 
+	if err := s.validateContext(ctx); err != nil {
+		s.logger.Errorf("context validation failed before threshold check: %v", err)
+		return nil, err
+	}
+
 	if result.Total >= rule.Threshold {
-		// 触发告警
 		event := model.NewAlertEvent(rule, result.Total)
 		if err := s.alertStore.Store(event); err != nil {
 			s.logger.Errorf("failed to store alert event: %v", err)
@@ -77,8 +120,12 @@ func (s *AlertService) EvaluateRule(ctx context.Context, rule *model.AlertRule) 
 	return nil, nil
 }
 
-// EvaluateAllRules 评估所有规则
 func (s *AlertService) EvaluateAllRules(ctx context.Context) ([]*model.AlertEvent, error) {
+	if err := s.validateContext(ctx); err != nil {
+		s.logger.Errorf("context validation failed before listing rules: %v", err)
+		return nil, err
+	}
+
 	rules, err := s.ruleStore.List()
 	if err != nil {
 		return nil, err
@@ -89,6 +136,12 @@ func (s *AlertService) EvaluateAllRules(ctx context.Context) ([]*model.AlertEven
 		if !rule.Enabled {
 			continue
 		}
+
+		if err := s.validateContext(ctx); err != nil {
+			s.logger.Errorf("context validation failed during rule iteration: %v", err)
+			return nil, err
+		}
+
 		event, err := s.EvaluateRule(ctx, rule)
 		if err != nil {
 			s.logger.Errorf("failed to evaluate rule %s: %v", rule.Name, err)
@@ -105,7 +158,6 @@ func (s *AlertService) EvaluateAllRules(ctx context.Context) ([]*model.AlertEven
 	return triggeredEvents, nil
 }
 
-// GetAlert 获取告警事件
 func (s *AlertService) GetAlert(ctx context.Context, id string) (*model.AlertEvent, error) {
 	if id == "" {
 		return nil, model.NewValidationError("id", "id cannot be empty")
@@ -113,27 +165,22 @@ func (s *AlertService) GetAlert(ctx context.Context, id string) (*model.AlertEve
 	return s.alertStore.GetByID(id)
 }
 
-// ListAlerts 列出所有告警
 func (s *AlertService) ListAlerts(ctx context.Context) ([]*model.AlertEvent, error) {
 	return s.alertStore.List()
 }
 
-// ListAlertsByRule 列出规则的告警
 func (s *AlertService) ListAlertsByRule(ctx context.Context, ruleID string) ([]*model.AlertEvent, error) {
 	return s.alertStore.ListByRule(ruleID)
 }
 
-// ListAlertsBySource 列出来源的告警
 func (s *AlertService) ListAlertsBySource(ctx context.Context, source string) ([]*model.AlertEvent, error) {
 	return s.alertStore.ListBySource(source)
 }
 
-// ListActiveAlerts 列出活跃告警
 func (s *AlertService) ListActiveAlerts(ctx context.Context) ([]*model.AlertEvent, error) {
 	return s.alertStore.ListActive()
 }
 
-// AcknowledgeAlert 确认告警
 func (s *AlertService) AcknowledgeAlert(ctx context.Context, id string) error {
 	if id == "" {
 		return model.NewValidationError("id", "id cannot be empty")
@@ -146,7 +193,6 @@ func (s *AlertService) AcknowledgeAlert(ctx context.Context, id string) error {
 	return nil
 }
 
-// ResolveAlert 解决告警
 func (s *AlertService) ResolveAlert(ctx context.Context, id string) error {
 	if id == "" {
 		return model.NewValidationError("id", "id cannot be empty")
@@ -159,7 +205,6 @@ func (s *AlertService) ResolveAlert(ctx context.Context, id string) error {
 	return nil
 }
 
-// DeleteAlert 删除告警
 func (s *AlertService) DeleteAlert(ctx context.Context, id string) error {
 	if id == "" {
 		return model.NewValidationError("id", "id cannot be empty")
@@ -172,7 +217,6 @@ func (s *AlertService) DeleteAlert(ctx context.Context, id string) error {
 	return nil
 }
 
-// AutoResolveExpired 自动解决过期告警
 func (s *AlertService) AutoResolveExpired(ctx context.Context) (int, error) {
 	if !s.config.Alert.EnableAutoResolve {
 		return 0, nil
@@ -203,7 +247,6 @@ func (s *AlertService) AutoResolveExpired(ctx context.Context) (int, error) {
 	return count, nil
 }
 
-// CleanupAlerts 清理过期告警
 func (s *AlertService) CleanupAlerts(ctx context.Context) (int64, error) {
 	retentionPeriod := s.config.Alert.MaxEventsRetention
 	if retentionPeriod <= 0 {
@@ -217,7 +260,6 @@ func (s *AlertService) CleanupAlerts(ctx context.Context) (int64, error) {
 	return count, nil
 }
 
-// CountActiveAlerts 统计活跃告警数
 func (s *AlertService) CountActiveAlerts(ctx context.Context) (int, error) {
 	return s.alertStore.CountActive()
 }

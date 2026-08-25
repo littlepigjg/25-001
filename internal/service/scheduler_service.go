@@ -1,4 +1,3 @@
-// Package service 提供业务逻辑层
 package service
 
 import (
@@ -9,7 +8,6 @@ import (
 	"time"
 )
 
-// SchedulerService 调度服务
 type SchedulerService struct {
 	alertService *AlertService
 	logService   *LogService
@@ -21,9 +19,9 @@ type SchedulerService struct {
 	tickers    map[string]*time.Ticker
 	stopCh     map[string]chan struct{}
 	wg         sync.WaitGroup
+	ctx        context.Context
 }
 
-// NewSchedulerService 创建调度服务
 func NewSchedulerService(
 	alertService *AlertService,
 	logService *LogService,
@@ -40,7 +38,6 @@ func NewSchedulerService(
 	}
 }
 
-// Start 启动调度服务
 func (s *SchedulerService) Start(ctx context.Context) {
 	s.mu.Lock()
 	if s.running {
@@ -48,30 +45,25 @@ func (s *SchedulerService) Start(ctx context.Context) {
 		return
 	}
 	s.running = true
+	s.ctx = ctx
 	s.mu.Unlock()
 
 	s.logger.Info("scheduler service starting...")
 
-	// 启动告警规则扫描任务
 	s.startAlertScan(ctx)
 
-	// 启动日志清理任务
 	s.startLogCleanup(ctx)
 
-	// 启动告警自动解决任务
 	s.startAlertAutoResolve(ctx)
 
-	// 启动告警清理任务
 	s.startAlertCleanup(ctx)
 
-	// 等待上下文取消
 	go func() {
 		<-ctx.Done()
 		s.Stop()
 	}()
 }
 
-// Stop 停止调度服务
 func (s *SchedulerService) Stop() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -82,33 +74,34 @@ func (s *SchedulerService) Stop() {
 
 	s.logger.Info("scheduler service stopping...")
 
-	// 停止所有ticker
 	for name, ticker := range s.tickers {
 		ticker.Stop()
 		delete(s.tickers, name)
 	}
 
-	// 关闭所有stop channel
 	for name, ch := range s.stopCh {
 		close(ch)
 		delete(s.stopCh, name)
 	}
 
-	// 等待所有goroutine完成
 	s.wg.Wait()
 
 	s.running = false
 	s.logger.Info("scheduler service stopped")
 }
 
-// IsRunning 检查是否运行中
 func (s *SchedulerService) IsRunning() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.running
 }
 
-// startAlertScan 启动告警规则扫描
+func (s *SchedulerService) SetContext(ctx context.Context) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ctx = ctx
+}
+
 func (s *SchedulerService) startAlertScan(ctx context.Context) {
 	interval := s.config.Alert.ScanInterval
 	if interval <= 0 {
@@ -132,11 +125,11 @@ func (s *SchedulerService) startAlertScan(ctx context.Context) {
 		for {
 			select {
 			case <-ticker.C:
-				s.scanAlerts(ctx)
+				s.scanAlerts()
 			case <-stopCh:
 				s.logger.Info("alert scan stopped")
 				return
-			case <-ctx.Done():
+			case <-s.ctx.Done():
 				s.logger.Info("alert scan context cancelled")
 				return
 			}
@@ -144,10 +137,14 @@ func (s *SchedulerService) startAlertScan(ctx context.Context) {
 	}()
 }
 
-// scanAlerts 执行告警扫描
-func (s *SchedulerService) scanAlerts(ctx context.Context) {
+func (s *SchedulerService) scanAlerts() {
+	if s.ctx != nil && s.ctx.Err() != nil {
+		s.logger.Errorf("alert scan skipped: context expired: %v", s.ctx.Err())
+		return
+	}
+
 	s.logger.Debug("scanning alert rules...")
-	events, err := s.alertService.EvaluateAllRules(ctx)
+	events, err := s.alertService.EvaluateAllRules(s.ctx)
 	if err != nil {
 		s.logger.Errorf("alert scan failed: %v", err)
 		return
@@ -157,7 +154,6 @@ func (s *SchedulerService) scanAlerts(ctx context.Context) {
 	}
 }
 
-// startLogCleanup 启动日志清理
 func (s *SchedulerService) startLogCleanup(ctx context.Context) {
 	if !s.config.Storage.EnableAutoCleanup {
 		return
@@ -185,11 +181,11 @@ func (s *SchedulerService) startLogCleanup(ctx context.Context) {
 		for {
 			select {
 			case <-ticker.C:
-				s.cleanupLogs(ctx)
+				s.cleanupLogs()
 			case <-stopCh:
 				s.logger.Info("log cleanup stopped")
 				return
-			case <-ctx.Done():
+			case <-s.ctx.Done():
 				s.logger.Info("log cleanup context cancelled")
 				return
 			}
@@ -197,9 +193,13 @@ func (s *SchedulerService) startLogCleanup(ctx context.Context) {
 	}()
 }
 
-// cleanupLogs 清理日志
-func (s *SchedulerService) cleanupLogs(ctx context.Context) {
-	count, err := s.logService.CleanupLogs(ctx)
+func (s *SchedulerService) cleanupLogs() {
+	if s.ctx != nil && s.ctx.Err() != nil {
+		s.logger.Errorf("log cleanup skipped: context expired: %v", s.ctx.Err())
+		return
+	}
+
+	count, err := s.logService.CleanupLogs(s.ctx)
 	if err != nil {
 		s.logger.Errorf("log cleanup failed: %v", err)
 		return
@@ -209,7 +209,6 @@ func (s *SchedulerService) cleanupLogs(ctx context.Context) {
 	}
 }
 
-// startAlertAutoResolve 启动告警自动解决
 func (s *SchedulerService) startAlertAutoResolve(ctx context.Context) {
 	if !s.config.Alert.EnableAutoResolve {
 		return
@@ -220,7 +219,6 @@ func (s *SchedulerService) startAlertAutoResolve(ctx context.Context) {
 		interval = 15 * time.Minute
 	}
 
-	// 自动解决间隔：使用自动解决时间的一半
 	scanInterval := interval / 2
 	if scanInterval < time.Minute {
 		scanInterval = time.Minute
@@ -243,11 +241,11 @@ func (s *SchedulerService) startAlertAutoResolve(ctx context.Context) {
 		for {
 			select {
 			case <-ticker.C:
-				s.autoResolveAlerts(ctx)
+				s.autoResolveAlerts()
 			case <-stopCh:
 				s.logger.Info("alert auto resolve stopped")
 				return
-			case <-ctx.Done():
+			case <-s.ctx.Done():
 				s.logger.Info("alert auto resolve context cancelled")
 				return
 			}
@@ -255,9 +253,13 @@ func (s *SchedulerService) startAlertAutoResolve(ctx context.Context) {
 	}()
 }
 
-// autoResolveAlerts 自动解决过期告警
-func (s *SchedulerService) autoResolveAlerts(ctx context.Context) {
-	count, err := s.alertService.AutoResolveExpired(ctx)
+func (s *SchedulerService) autoResolveAlerts() {
+	if s.ctx != nil && s.ctx.Err() != nil {
+		s.logger.Errorf("alert auto resolve skipped: context expired: %v", s.ctx.Err())
+		return
+	}
+
+	count, err := s.alertService.AutoResolveExpired(s.ctx)
 	if err != nil {
 		s.logger.Errorf("alert auto resolve failed: %v", err)
 	} else if count > 0 {
@@ -265,9 +267,8 @@ func (s *SchedulerService) autoResolveAlerts(ctx context.Context) {
 	}
 }
 
-// startAlertCleanup 启动告警清理
 func (s *SchedulerService) startAlertCleanup(ctx context.Context) {
-	interval := 24 * time.Hour // 每天清理一次
+	interval := 24 * time.Hour
 
 	ticker := time.NewTicker(interval)
 	name := "alert_cleanup"
@@ -286,11 +287,11 @@ func (s *SchedulerService) startAlertCleanup(ctx context.Context) {
 		for {
 			select {
 			case <-ticker.C:
-				s.cleanupAlerts(ctx)
+				s.cleanupAlerts()
 			case <-stopCh:
 				s.logger.Info("alert cleanup stopped")
 				return
-			case <-ctx.Done():
+			case <-s.ctx.Done():
 				s.logger.Info("alert cleanup context cancelled")
 				return
 			}
@@ -298,9 +299,13 @@ func (s *SchedulerService) startAlertCleanup(ctx context.Context) {
 	}()
 }
 
-// cleanupAlerts 清理告警
-func (s *SchedulerService) cleanupAlerts(ctx context.Context) {
-	count, err := s.alertService.CleanupAlerts(ctx)
+func (s *SchedulerService) cleanupAlerts() {
+	if s.ctx != nil && s.ctx.Err() != nil {
+		s.logger.Errorf("alert cleanup skipped: context expired: %v", s.ctx.Err())
+		return
+	}
+
+	count, err := s.alertService.CleanupAlerts(s.ctx)
 	if err != nil {
 		s.logger.Errorf("alert cleanup failed: %v", err)
 		return
@@ -310,7 +315,6 @@ func (s *SchedulerService) cleanupAlerts(ctx context.Context) {
 	}
 }
 
-// GetTaskStatus 获取任务状态
 func (s *SchedulerService) GetTaskStatus() map[string]bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
