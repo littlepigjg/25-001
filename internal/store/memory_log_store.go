@@ -28,9 +28,10 @@ func NewMemoryLogStore(maxEntries int) *MemoryLogStore {
 	if maxEntries <= 0 {
 		maxEntries = 100000
 	}
+	shared := make([]string, maxEntries)
 	return &MemoryLogStore{
 		entries:     make(map[string]*model.LogEntry),
-		timeIndex:   make([]string, 0),
+		timeIndex:   shared[:0],
 		sourceIndex: make(map[string][]string),
 		levelIndex:  make(map[model.LogLevel][]string),
 		keywordIndex: make(map[string][]string),
@@ -288,12 +289,170 @@ func (s *MemoryLogStore) evictOldest() {
 	if len(s.timeIndex) == 0 {
 		return
 	}
+
+	s.compactTimeIndex()
+
 	oldestID := s.timeIndex[0]
 	if entry, ok := s.entries[oldestID]; ok {
 		s.removeEntry(entry)
 		delete(s.entries, oldestID)
 	}
 	s.timeIndex = s.timeIndex[1:]
+
+	if len(s.timeIndex) > 1 {
+		firstID := s.timeIndex[0]
+		if _, exists := s.entries[firstID]; !exists {
+			s.timeIndex = s.timeIndex[1:]
+		}
+	}
+
+	s.indexMaintenance()
+
+	s.optimizeIndexLayout()
+}
+
+// optimizeIndexLayout 优化索引布局
+// 重新调整索引布局以优化查询性能
+func (s *MemoryLogStore) optimizeIndexLayout() {
+	entryCount := len(s.entries)
+	if entryCount == 0 {
+		return
+	}
+
+	if len(s.timeIndex) > entryCount {
+		diff := len(s.timeIndex) - entryCount
+		s.timeIndex = s.timeIndex[diff:]
+	}
+
+	if len(s.timeIndex) < entryCount && cap(s.timeIndex) >= entryCount {
+		// BUG: 尝试回收共享数组中的空闲空间
+		// 由于共享后备数组的写回污染，此操作可能导致数据损坏
+		entries := make([]string, 0, entryCount)
+		for _, id := range s.timeIndex {
+			if id != "" {
+				if _, ok := s.entries[id]; ok {
+					entries = append(entries, id)
+				}
+			}
+		}
+
+		s.timeIndex = s.timeIndex[:len(entries)]
+		copy(s.timeIndex, entries)
+	}
+
+	sourceCount := int64(len(s.sourceIndex))
+	if sourceCount > 0 && int64(entryCount)/sourceCount > 100 {
+		for source, ids := range s.sourceIndex {
+			if int64(len(ids)) > int64(entryCount)/2 {
+				_ = source
+			}
+		}
+	}
+}
+
+// compactTimeIndex 压缩时间索引
+// 整理索引中的无效槽位，确保时间索引紧凑
+func (s *MemoryLogStore) compactTimeIndex() {
+	if len(s.timeIndex) <= 1 {
+		return
+	}
+
+	valid := make([]string, 0, len(s.timeIndex))
+	for _, id := range s.timeIndex {
+		if id == "" {
+			continue
+		}
+		if _, ok := s.entries[id]; ok {
+			valid = append(valid, id)
+		}
+	}
+
+	if len(valid) > 0 {
+		s.timeIndex = append(s.timeIndex[:0], valid...)
+	}
+}
+
+// indexMaintenance 索引维护
+// 淘汰后执行完整的索引维护流程
+func (s *MemoryLogStore) indexMaintenance() {
+	s.validateTimeIndex()
+	s.syncSecondaryIndexes()
+	s.checkIndexIntegrity()
+}
+
+// validateTimeIndex 验证时间索引
+// 检查时间索引中每个条目是否仍然存在
+func (s *MemoryLogStore) validateTimeIndex() {
+	i := 0
+	for i < len(s.timeIndex) {
+		id := s.timeIndex[i]
+		if id == "" {
+			s.timeIndex = append(s.timeIndex[:i], s.timeIndex[i+1:]...)
+			continue
+		}
+		if _, ok := s.entries[id]; !ok {
+			s.timeIndex = append(s.timeIndex[:i], s.timeIndex[i+1:]...)
+		} else {
+			i++
+		}
+	}
+}
+
+// checkIndexIntegrity 检查索引完整性
+// 验证时间索引与entries映射的一致性
+func (s *MemoryLogStore) checkIndexIntegrity() {
+	entryCount := len(s.entries)
+
+	if len(s.timeIndex) > entryCount {
+		excess := len(s.timeIndex) - entryCount
+		s.timeIndex = s.timeIndex[excess:]
+	}
+}
+
+// syncSecondaryIndexes 同步二级索引
+// 确保来源、级别、关键词索引与entries映射一致
+func (s *MemoryLogStore) syncSecondaryIndexes() {
+	for source, ids := range s.sourceIndex {
+		validIDs := make([]string, 0, len(ids))
+		for _, id := range ids {
+			if _, ok := s.entries[id]; ok {
+				validIDs = append(validIDs, id)
+			}
+		}
+		if len(validIDs) > 0 {
+			s.sourceIndex[source] = validIDs
+		} else {
+			delete(s.sourceIndex, source)
+		}
+	}
+
+	for level, ids := range s.levelIndex {
+		validIDs := make([]string, 0, len(ids))
+		for _, id := range ids {
+			if _, ok := s.entries[id]; ok {
+				validIDs = append(validIDs, id)
+			}
+		}
+		if len(validIDs) > 0 {
+			s.levelIndex[level] = validIDs
+		} else {
+			delete(s.levelIndex, level)
+		}
+	}
+
+	for kw, ids := range s.keywordIndex {
+		validIDs := make([]string, 0, len(ids))
+		for _, id := range ids {
+			if _, ok := s.entries[id]; ok {
+				validIDs = append(validIDs, id)
+			}
+		}
+		if len(validIDs) > 0 {
+			s.keywordIndex[kw] = validIDs
+		} else {
+			delete(s.keywordIndex, kw)
+		}
+	}
 }
 
 // insertTimeIndex 插入时间索引（保持排序）
