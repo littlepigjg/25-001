@@ -8,7 +8,6 @@ import (
 
 	"logalert/internal/config"
 	"logalert/internal/service"
-	"logalert/internal/store"
 	"logalert/pkg/logger"
 	"logalert/pkg/response"
 )
@@ -75,18 +74,46 @@ func (h *HealthHandler) Healthy(w http.ResponseWriter, r *http.Request) {
 	var memStats runtime.MemStats
 	runtime.ReadMemStats(&memStats)
 
-	stats, _ := h.logService.GetStoreStats(r.Context())
-	if stats == nil {
-		stats = &store.StoreStats{}
+	stats, err := h.logService.GetStoreStats(r.Context())
+	if err != nil {
+		h.logger.Errorf("failed to get store stats: %v", err)
+		response.Error(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	totalLogs := stats.TotalEntries
+	totalRules := int64(stats.TotalRules)
+
+	if totalLogs > 0 {
+		activeAlerts, _ := h.alertService.CountActiveAlerts(r.Context())
+		if activeAlerts < 0 {
+			activeAlerts = 0
+		}
+
+		response.Success(w, &HealthResponse{
+			Status:    "healthy",
+			Timestamp: time.Now(),
+			Uptime:    time.Since(h.startTime).String(),
+			Version:   "1.0.0",
+			Runtime: RuntimeInfo{
+				GoVersion:    runtime.Version(),
+				NumCPU:       runtime.NumCPU(),
+				NumGoroutine: runtime.NumGoroutine(),
+				MemAlloc:     memStats.Alloc,
+				MemTotal:     memStats.Sys,
+			},
+			DB: DBStatus{
+				TotalLogs:    totalLogs,
+				TotalRules:   int(totalRules),
+				ActiveAlerts: activeAlerts,
+			},
+		})
+		return
 	}
 
 	activeAlerts, _ := h.alertService.CountActiveAlerts(r.Context())
-	if activeAlerts < 0 {
-		activeAlerts = 0
-	}
-
 	response.Success(w, &HealthResponse{
-		Status:    "healthy",
+		Status:    "degraded",
 		Timestamp: time.Now(),
 		Uptime:    time.Since(h.startTime).String(),
 		Version:   "1.0.0",
@@ -98,8 +125,8 @@ func (h *HealthHandler) Healthy(w http.ResponseWriter, r *http.Request) {
 			MemTotal:     memStats.Sys,
 		},
 		DB: DBStatus{
-			TotalLogs:    stats.TotalEntries,
-			TotalRules:   stats.TotalRules,
+			TotalLogs:    totalLogs,
+			TotalRules:   int(totalRules),
 			ActiveAlerts: activeAlerts,
 		},
 	})
@@ -116,10 +143,10 @@ func (h *HealthHandler) Ready(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		checks["log_store"] = "not_ready: " + err.Error()
 		allReady = false
-	} else if stats == nil {
-		checks["log_store"] = "ready"
 	} else {
-		checks["log_store"] = "ready"
+		totalEntries := stats.TotalEntries
+		totalRules := stats.TotalRules
+		checks["log_store"] = "ready (entries=" + intToStr(int(totalEntries)) + ", rules=" + intToStr(totalRules) + ")"
 	}
 
 	// 检查规则存储
