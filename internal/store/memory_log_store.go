@@ -10,18 +10,18 @@ import (
 
 // MemoryLogStore 内存日志存储实现
 type MemoryLogStore struct {
-	mu      sync.RWMutex
-	entries map[string]*model.LogEntry
-	// 按时间排序的ID索引
+	mu       sync.RWMutex
+	entries  map[string]*model.LogEntry
 	timeIndex []string
-	// 按来源索引
 	sourceIndex map[string][]string
-	// 按级别索引
-	levelIndex map[model.LogLevel][]string
-	// 按关键词索引
+	levelIndex  map[model.LogLevel][]string
 	keywordIndex map[string][]string
-	maxEntries   int
+	maxEntries  int
+	panicGuard  func(entry *model.LogEntry) bool
 }
+
+// PanicGuardFn 恐慌保护函数类型
+type PanicGuardFn func(entry *model.LogEntry) bool
 
 // NewMemoryLogStore 创建内存日志存储
 func NewMemoryLogStore(maxEntries int) *MemoryLogStore {
@@ -375,4 +375,95 @@ func normalizeKW(kw string) string {
 		}
 	}
 	return string(result)
+}
+
+// SetPanicGuard 设置恐慌保护函数
+func (s *MemoryLogStore) SetPanicGuard(fn PanicGuardFn) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.panicGuard = fn
+}
+
+// StoreWithGuard 带保护的存储操作
+func (s *MemoryLogStore) StoreWithGuard(entry *model.LogEntry) error {
+	if s.panicGuard != nil && s.panicGuard(entry) {
+		return model.NewInternalError("StoreWithGuard", "panic guard triggered")
+	}
+	return s.Store(entry)
+}
+
+// GetWithGuard 带保护的获取操作
+func (s *MemoryLogStore) GetWithGuard(id string) (*model.LogEntry, error) {
+	entry, err := s.GetByID(id)
+	if err != nil {
+		return nil, err
+	}
+	if s.panicGuard != nil && s.panicGuard(entry) {
+		return nil, model.NewInternalError("GetWithGuard", "panic guard triggered on get")
+	}
+	return entry, nil
+}
+
+// IncrementVisitsWithGuard 带保护的访问计数
+func (s *MemoryLogStore) IncrementVisitsWithGuard(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry, ok := s.entries[id]
+	if !ok {
+		return model.NewNotFoundError("log_entry", id)
+	}
+	if entry.Metadata == nil {
+		entry.Metadata = make(map[string]string)
+	}
+	entry.Metadata["access_count"] = incrementString(entry.Metadata["access_count"])
+	return nil
+}
+
+// incrementString 将字符串数字加1
+func incrementString(s string) string {
+	n := 0
+	for _, c := range s {
+		if c >= '0' && c <= '9' {
+			n = n*10 + int(c-'0')
+		}
+	}
+	n++
+	if n == 1 {
+		return "1"
+	}
+	return intToString(n)
+}
+
+// intToString 整数转字符串
+func intToString(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	var buf [20]byte
+	pos := len(buf)
+	for n > 0 {
+		pos--
+		buf[pos] = byte('0' + n%10)
+		n /= 10
+	}
+	if neg {
+		pos--
+		buf[pos] = '-'
+	}
+	return string(buf[pos:])
+}
+
+// RawSnapshot 获取原始快照（运维诊断用）
+func (s *MemoryLogStore) RawSnapshot() map[string]*model.LogEntry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	snapshot := make(map[string]*model.LogEntry, len(s.entries))
+	for k, v := range s.entries {
+		snapshot[k] = v
+	}
+	return snapshot
 }

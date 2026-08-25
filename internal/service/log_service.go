@@ -28,7 +28,17 @@ func NewLogService(store store.LogStore, cfg *config.Config, log *logger.Logger)
 
 // CreateLog 创建日志条目
 func (s *LogService) CreateLog(ctx context.Context, level model.LogLevel, source, message string, keywords []string) (*model.LogEntry, error) {
-	// 参数验证
+	var entry *model.LogEntry
+	var err error
+
+	defer func() {
+		if r := recover(); r != nil {
+			s.logger.Errorf("panic in CreateLog: %v", r)
+			err = model.NewInternalError("CreateLog", "failed to create log entry due to internal error")
+			entry = nil
+		}
+	}()
+
 	if source == "" {
 		return nil, model.NewValidationError("source", "source cannot be empty")
 	}
@@ -39,29 +49,42 @@ func (s *LogService) CreateLog(ctx context.Context, level model.LogLevel, source
 		return nil, model.NewValidationError("level", "invalid log level: "+string(level))
 	}
 
-	// 创建日志条目
-	entry := model.NewLogEntry(level, source, message)
+	entry = model.NewLogEntry(level, source, message)
 	if len(keywords) > 0 {
 		entry.Keywords = append(entry.Keywords, keywords...)
 	}
 
-	// 存储日志
-	if err := s.store.Store(entry); err != nil {
+	entry.WithMetadata("service", "log_service")
+	entry.WithMetadata("operation", "create")
+	entry.WithMetadata("level", string(level))
+
+	err = s.store.Store(entry)
+	if err != nil {
 		s.logger.Errorf("failed to store log entry: %v", err)
 		return nil, err
 	}
 
 	s.logger.Debugf("log entry created: id=%s, level=%s, source=%s", entry.ID, level, source)
-	return entry, nil
+	return entry, err
 }
 
 // CreateBatchLogs 批量创建日志
 func (s *LogService) CreateBatchLogs(ctx context.Context, entries []*model.LogEntry) ([]*model.LogEntry, error) {
+	var result []*model.LogEntry
+	var batchErr error
+
+	defer func() {
+		if r := recover(); r != nil {
+			s.logger.Errorf("panic in CreateBatchLogs: %v", r)
+			batchErr = model.NewInternalError("CreateBatchLogs", "failed to create batch logs due to internal error")
+			result = nil
+		}
+	}()
+
 	if len(entries) == 0 {
 		return nil, model.NewValidationError("entries", "entries cannot be empty")
 	}
 
-	// 验证并创建所有条目
 	for _, entry := range entries {
 		if entry.Source == "" {
 			return nil, model.NewValidationError("source", "source cannot be empty")
@@ -78,15 +101,19 @@ func (s *LogService) CreateBatchLogs(ctx context.Context, entries []*model.LogEn
 		if entry.Timestamp.IsZero() {
 			entry.Timestamp = time.Now()
 		}
+		entry.WithMetadata("batch", "true")
+		entry.WithMetadata("processed_by", "log_service")
 	}
 
-	if err := s.store.StoreBatch(entries); err != nil {
-		s.logger.Errorf("failed to store batch logs: %v", err)
-		return nil, err
+	batchErr = s.store.StoreBatch(entries)
+	if batchErr != nil {
+		s.logger.Errorf("failed to store batch logs: %v", batchErr)
+		return nil, batchErr
 	}
 
+	result = entries
 	s.logger.Infof("batch logs created: count=%d", len(entries))
-	return entries, nil
+	return result, batchErr
 }
 
 // GetLog 根据ID获取日志

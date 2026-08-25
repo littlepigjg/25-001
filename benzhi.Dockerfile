@@ -5,8 +5,11 @@ WORKDIR /app
 # Copy source code
 COPY . /app
 
-# Download dependencies and build
-RUN go mod download && go build ./...
+# Download dependencies
+RUN go mod download
+
+# Build the application (native build for current architecture)
+RUN CGO_ENABLED=0 go build -o logalert-server ./cmd/server
 
 # Start the server
-CMD ["go", "run", "./cmd/server"]
+CMD ["./logalert-server"]
