@@ -43,6 +43,30 @@ type StorageConfig struct {
 	RetentionPeriod   time.Duration `json:"retention_period"`
 	CleanupInterval   time.Duration `json:"cleanup_interval"`
 	EnableAutoCleanup bool          `json:"enable_auto_cleanup"`
+	URLFile           string        `json:"url_file"`
+	LogFile           string        `json:"log_file"`
+	SyncIntervalVal   time.Duration `json:"sync_interval"`
+	FlushOnWriteVal   bool          `json:"flush_on_write"`
+}
+
+// URLFilePath 设置URL存储文件路径
+func (s *StorageConfig) URLFilePath(path string) {
+	s.URLFile = path
+}
+
+// LogFilePath 设置日志存储文件路径
+func (s *StorageConfig) LogFilePath(path string) {
+	s.LogFile = path
+}
+
+// SyncInterval 设置同步间隔
+func (s *StorageConfig) SyncInterval(d time.Duration) {
+	s.SyncIntervalVal = d
+}
+
+// FlushOnWrite 设置是否写入时刷新
+func (s *StorageConfig) FlushOnWrite(b bool) {
+	s.FlushOnWriteVal = b
 }
 
 // AlertConfig 告警配置
@@ -75,6 +99,11 @@ type QueryConfig struct {
 	DefaultLimit  int `json:"default_limit"`
 	MaxLimit      int `json:"max_limit"`
 	DefaultOffset int `json:"default_offset"`
+}
+
+// Default 创建默认配置
+func Default() *Config {
+	return DefaultConfig()
 }
 
 // DefaultConfig 创建默认配置
