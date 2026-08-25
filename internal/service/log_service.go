@@ -12,17 +12,19 @@ import (
 
 // LogService 日志服务
 type LogService struct {
-	store  store.LogStore
-	config *config.Config
-	logger *logger.Logger
+	store     store.LogStore
+	config    *config.Config
+	logger    *logger.Logger
+	windowMgr *WindowManager
 }
 
 // NewLogService 创建日志服务
-func NewLogService(store store.LogStore, cfg *config.Config, log *logger.Logger) *LogService {
+func NewLogService(store store.LogStore, cfg *config.Config, log *logger.Logger, windowMgr *WindowManager) *LogService {
 	return &LogService{
-		store:  store,
-		config: cfg,
-		logger: log,
+		store:     store,
+		config:    cfg,
+		logger:    log,
+		windowMgr: windowMgr,
 	}
 }
 
@@ -104,6 +106,12 @@ func (s *LogService) QueryLogs(ctx context.Context, query *model.LogQuery) (*mod
 	}
 	if err := query.Validate(); err != nil {
 		return nil, err
+	}
+	if s.windowMgr != nil && query.HasTimeRange() {
+		if err := s.windowMgr.ValidateLogQueryTime(query); err != nil {
+			s.logger.Warnf("time range validation failed: %v", err)
+			return nil, err
+		}
 	}
 	return s.store.Query(query)
 }

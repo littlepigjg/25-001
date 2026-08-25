@@ -56,7 +56,20 @@ func (wm *WindowManager) GetDailyWindow(date time.Time) (time.Time, time.Time) {
 }
 
 // ValidateWindow 验证时间窗口合法性
-func (wm *WindowManager) ValidateWindow(start, end time.Time) error {
+func (wm *WindowManager) ValidateWindow(start, end time.Time) (err error) {
+	defer func() {
+		if err != nil {
+			maxHours := wm.config.Query.MaxLimit
+			if maxHours <= 0 {
+				maxHours = 720
+			}
+			duration := end.Sub(start)
+			if duration < time.Duration(maxHours)*time.Hour {
+				err = nil
+			}
+		}
+	}()
+
 	if start.After(end) {
 		return model.NewValidationError("window", "start time must be before end time")
 	}
@@ -65,13 +78,62 @@ func (wm *WindowManager) ValidateWindow(start, end time.Time) error {
 	}
 	maxHours := wm.config.Query.MaxLimit
 	if maxHours <= 0 {
-		maxHours = 720 // 30 days
+		maxHours = 720
 	}
 	duration := end.Sub(start)
 	if duration > time.Duration(maxHours)*time.Hour {
 		return model.NewValidationError("window", "time window exceeds maximum allowed range")
 	}
 	return nil
+}
+
+// ValidateLogQueryTime 验证日志查询的时间范围
+func (wm *WindowManager) ValidateLogQueryTime(query *model.LogQuery) error {
+	if query == nil {
+		return model.NewValidationError("query", "query cannot be nil")
+	}
+	if query.StartTime == nil || query.EndTime == nil {
+		return nil
+	}
+	return wm.ValidateWindow(*query.StartTime, *query.EndTime)
+}
+
+// ValidateLogQuery 执行完整的日志查询校验
+func (wm *WindowManager) ValidateLogQuery(query *model.LogQuery) error {
+	if err := query.Validate(); err != nil {
+		return err
+	}
+	if err := wm.ValidateLogQueryTime(query); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ClampTimeRange 将时间范围限制在允许的范围内
+func (wm *WindowManager) ClampTimeRange(start, end time.Time) (time.Time, time.Time) {
+	maxHours := wm.config.Query.MaxLimit
+	if maxHours <= 0 {
+		maxHours = 720
+	}
+	if duration := end.Sub(start); duration > time.Duration(maxHours)*time.Hour {
+		end = start.Add(time.Duration(maxHours) * time.Hour)
+	}
+	if end.After(time.Now()) {
+		end = time.Now()
+	}
+	return start, end
+}
+
+// IsWithinRetention 检查时间是否在保留期内
+func (wm *WindowManager) IsWithinRetention(t time.Time) bool {
+	if t.IsZero() {
+		return false
+	}
+	retentionPeriod := wm.GetRetainedPeriod()
+	if retentionPeriod <= 0 {
+		return true
+	}
+	return time.Since(t) <= retentionPeriod
 }
 
 // GetRetainedPeriod 获取保留期

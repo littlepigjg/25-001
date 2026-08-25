@@ -15,14 +15,16 @@ import (
 type QueryHandler struct {
 	logService  *service.LogService
 	statsService *service.StatsService
+	windowMgr   *service.WindowManager
 	logger      *logger.Logger
 }
 
 // NewQueryHandler 创建查询处理器
-func NewQueryHandler(logSvc *service.LogService, statsSvc *service.StatsService, log *logger.Logger) *QueryHandler {
+func NewQueryHandler(logSvc *service.LogService, statsSvc *service.StatsService, windowMgr *service.WindowManager, log *logger.Logger) *QueryHandler {
 	return &QueryHandler{
 		logService:  logSvc,
 		statsService: statsSvc,
+		windowMgr:   windowMgr,
 		logger:      log,
 	}
 }
@@ -32,7 +34,6 @@ func (h *QueryHandler) SearchLogs(w http.ResponseWriter, r *http.Request) {
 	query := model.DefaultLogQuery()
 	params := r.URL.Query()
 
-	// 构建搜索条件
 	if keyword := params.Get("keyword"); keyword != "" {
 		query.Keywords = append(query.Keywords, keyword)
 	}
@@ -65,6 +66,14 @@ func (h *QueryHandler) SearchLogs(w http.ResponseWriter, r *http.Request) {
 	if offset := params.Get("offset"); offset != "" {
 		if n, err := parseInt(offset); err == nil {
 			query.Offset = n
+		}
+	}
+
+	if query.HasTimeRange() && h.windowMgr != nil {
+		if err := h.windowMgr.ValidateLogQueryTime(query); err != nil {
+			h.logger.Errorf("time range validation failed: %v", err)
+			response.BadRequest(w, err)
+			return
 		}
 	}
 
@@ -147,6 +156,13 @@ func (h *QueryHandler) GetErrorLogs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if query.HasTimeRange() && h.windowMgr != nil {
+		if err := h.windowMgr.ValidateLogQueryTime(query); err != nil {
+			response.BadRequest(w, err)
+			return
+		}
+	}
+
 	ctx := r.Context()
 	result, err := h.logService.QueryLogs(ctx, query)
 	if err != nil {
@@ -172,6 +188,13 @@ func (h *QueryHandler) GetRecentLogs(w http.ResponseWriter, r *http.Request) {
 
 	startTime := time.Now().Add(-time.Duration(minutes) * time.Minute)
 	query.StartTime = &startTime
+
+	if query.HasTimeRange() && h.windowMgr != nil {
+		if err := h.windowMgr.ValidateLogQueryTime(query); err != nil {
+			response.BadRequest(w, err)
+			return
+		}
+	}
 
 	ctx := r.Context()
 	result, err := h.logService.QueryLogs(ctx, query)

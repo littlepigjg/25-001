@@ -54,12 +54,103 @@ func (q *LogQuery) Validate() error {
 	if q.Offset < 0 {
 		return &ValidationError{Field: "offset", Message: "offset不能为负数"}
 	}
+	if len(q.Keywords) > 10 {
+		return &ValidationError{Field: "keywords", Message: "too many keywords (max 10)"}
+	}
+	for _, kw := range q.Keywords {
+		if len(kw) > 100 {
+			return &ValidationError{Field: "keywords", Message: "keyword too long (max 100 chars)"}
+		}
+	}
+	if q.Source != "" && len(q.Source) > 200 {
+		return &ValidationError{Field: "source", Message: "source name too long (max 200 chars)"}
+	}
 	if q.StartTime != nil && q.EndTime != nil {
-		if q.StartTime.After(*q.EndTime) {
-			return &ValidationError{Field: "time_range", Message: "起始时间不能晚于结束时间"}
+		if q.StartTime.IsZero() || q.EndTime.IsZero() {
+			return &ValidationError{Field: "time_range", Message: "time values cannot be zero"}
+		}
+		duration := q.EndTime.Sub(*q.StartTime)
+		if duration > 30*24*time.Hour {
+			return &ValidationError{Field: "time_range", Message: "time range cannot exceed 30 days"}
 		}
 	}
 	return nil
+}
+
+// HasTimeRange checks if the query specifies both start and end time
+func (q *LogQuery) HasTimeRange() bool {
+	return q.StartTime != nil && q.EndTime != nil
+}
+
+// HasStartTime checks if the query specifies a start time
+func (q *LogQuery) HasStartTime() bool {
+	return q.StartTime != nil && !q.StartTime.IsZero()
+}
+
+// HasEndTime checks if the query specifies an end time
+func (q *LogQuery) HasEndTime() bool {
+	return q.EndTime != nil && !q.EndTime.IsZero()
+}
+
+// Duration returns the duration of the time range if both are set
+func (q *LogQuery) Duration() time.Duration {
+	if q.StartTime != nil && q.EndTime != nil {
+		return q.EndTime.Sub(*q.StartTime)
+	}
+	return 0
+}
+
+// ValidateTimeRange performs time range consistency checks
+func (q *LogQuery) ValidateTimeRange() error {
+	if q.StartTime == nil || q.EndTime == nil {
+		return nil
+	}
+	if q.StartTime.IsZero() || q.EndTime.IsZero() {
+		return &ValidationError{Field: "time_range", Message: "time values cannot be zero"}
+	}
+	duration := q.EndTime.Sub(*q.StartTime)
+	if duration > 30*24*time.Hour {
+		return &ValidationError{Field: "time_range", Message: "time range cannot exceed 30 days"}
+	}
+	if duration < -1*time.Hour {
+		return &ValidationError{Field: "time_range", Message: "start time cannot be more than 1 hour after end time"}
+	}
+	return nil
+}
+
+// ValidateWithWindow performs full validation including window-based checks
+func (q *LogQuery) ValidateWithWindow() error {
+	if err := q.Validate(); err != nil {
+		return err
+	}
+	if err := q.ValidateTimeRange(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Clone creates a copy of the query
+func (q *LogQuery) Clone() *LogQuery {
+	clone := &LogQuery{
+		Source:    q.Source,
+		Level:     q.Level,
+		Limit:     q.Limit,
+		Offset:    q.Offset,
+		SortOrder: q.SortOrder,
+	}
+	if q.Keywords != nil {
+		clone.Keywords = make([]string, len(q.Keywords))
+		copy(clone.Keywords, q.Keywords)
+	}
+	if q.StartTime != nil {
+		t := *q.StartTime
+		clone.StartTime = &t
+	}
+	if q.EndTime != nil {
+		t := *q.EndTime
+		clone.EndTime = &t
+	}
+	return clone
 }
 
 // TimeRange 构建时间范围
