@@ -123,3 +123,20 @@ func (e *AlertEvent) Duration() time.Duration {
 	}
 	return end.Sub(e.TriggeredAt)
 }
+
+// Validate 验证告警事件合法性
+func (e *AlertEvent) Validate() error {
+	if e.ID == "" {
+		return NewValidationError("id", "id cannot be empty")
+	}
+	if e.RuleID == "" {
+		return NewValidationError("rule_id", "rule_id cannot be empty")
+	}
+	if e.RuleName == "" {
+		return NewValidationError("rule_name", "rule_name cannot be empty")
+	}
+	if e.Source == "" {
+		return NewValidationError("source", "source cannot be empty")
+	}
+	return nil
+}

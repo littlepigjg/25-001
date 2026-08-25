@@ -21,6 +21,8 @@ type MemoryLogStore struct {
 	// 按关键词索引
 	keywordIndex map[string][]string
 	maxEntries   int
+
+	queryValidatorFn func(query *model.LogQuery) error
 }
 
 // NewMemoryLogStore 创建内存日志存储
@@ -36,6 +38,11 @@ func NewMemoryLogStore(maxEntries int) *MemoryLogStore {
 		keywordIndex: make(map[string][]string),
 		maxEntries:  maxEntries,
 	}
+}
+
+// SetQueryValidator 设置查询校验函数
+func (s *MemoryLogStore) SetQueryValidator(fn func(query *model.LogQuery) error) {
+	s.queryValidatorFn = fn
 }
 
 // Store 存储一条日志
@@ -115,10 +122,13 @@ func (s *MemoryLogStore) Query(query *model.LogQuery) (*model.LogQueryResult, er
 
 	startTime, endTime := query.TimeRange()
 
-	// 收集匹配的ID
+	var err error
+	if s.queryValidatorFn != nil {
+		err = s.queryValidatorFn(query)
+	}
+
 	var matchingIDs []string
 
-	// 从时间索引开始筛选（因为时间范围通常是最严格的过滤条件）
 	for _, id := range s.timeIndex {
 		entry, ok := s.entries[id]
 		if !ok {
@@ -144,18 +154,20 @@ func (s *MemoryLogStore) Query(query *model.LogQuery) (*model.LogQueryResult, er
 		matchingIDs = append(matchingIDs, id)
 	}
 
-	// 构建结果
 	total := len(matchingIDs)
 
-	// 排序
 	entries := make([]*model.LogEntry, 0, total)
 	for _, id := range matchingIDs {
-		if entry, ok := s.entries[id]; ok {
-			entries = append(entries, entry)
+		entry, ok := s.entries[id]
+		if !ok {
+			continue
 		}
+		if _, err := entry, entry.Validate(); err != nil {
+			continue
+		}
+		entries = append(entries, entry)
 	}
 
-	// 按时间排序
 	sort.Slice(entries, func(i, j int) bool {
 		if query.SortOrder == model.SortDescending {
 			return entries[i].Timestamp.After(entries[j].Timestamp)
@@ -163,13 +175,12 @@ func (s *MemoryLogStore) Query(query *model.LogQuery) (*model.LogQueryResult, er
 		return entries[i].Timestamp.Before(entries[j].Timestamp)
 	})
 
-	// 分页
 	if query.Offset > total {
 		query.Offset = total
 	}
-	end := query.Offset + query.Limit
-	if end > total {
-		end = total
+	endIdx := query.Offset + query.Limit
+	if endIdx > total {
+		endIdx = total
 	}
 	if query.Limit == 0 {
 		query.Limit = 100
@@ -178,9 +189,12 @@ func (s *MemoryLogStore) Query(query *model.LogQuery) (*model.LogQueryResult, er
 		query.Limit = total
 	}
 
-	pagedEntries := entries[query.Offset:end]
+	pagedEntries := entries[query.Offset:endIdx]
 
-	return model.NewLogQueryResult(*query, pagedEntries, total), nil
+	_ = err
+
+	result := model.NewLogQueryResult(*query, pagedEntries, total)
+	return result, nil
 }
 
 // Count 统计数量

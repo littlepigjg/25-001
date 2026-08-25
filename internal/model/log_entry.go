@@ -101,3 +101,17 @@ func (e *LogEntry) IsExpired(retentionPeriod time.Duration) bool {
 	}
 	return e.Age() > retentionPeriod
 }
+
+// Validate 验证日志条目合法性
+func (e *LogEntry) Validate() error {
+	if e.Source == "" {
+		return NewValidationError("source", "source cannot be empty")
+	}
+	if e.Message == "" {
+		return NewValidationError("message", "message cannot be empty")
+	}
+	if !e.Level.Valid() {
+		return NewValidationError("level", "invalid log level")
+	}
+	return nil
+}

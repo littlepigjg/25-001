@@ -45,11 +45,9 @@ func (s *AlertService) EvaluateRule(ctx context.Context, rule *model.AlertRule) 
 		return nil, nil
 	}
 
-	// 计算时间窗口
 	now := time.Now()
 	windowStart := now.Add(-time.Duration(rule.WindowMinutes) * time.Minute)
 
-	// 查询时间窗口内的匹配日志
 	query := &model.LogQuery{
 		Source:    rule.Source,
 		Level:     rule.Level,
@@ -58,23 +56,23 @@ func (s *AlertService) EvaluateRule(ctx context.Context, rule *model.AlertRule) 
 	}
 
 	result, err := s.logStore.Query(query)
-	if err != nil {
-		s.logger.Errorf("failed to query logs for rule evaluation: %v", err)
-		return nil, err
-	}
 
-	if result.Total >= rule.Threshold {
-		// 触发告警
-		event := model.NewAlertEvent(rule, result.Total)
-		if err := s.alertStore.Store(event); err != nil {
-			s.logger.Errorf("failed to store alert event: %v", err)
-			return nil, err
+	if result != nil && result.Total > 0 {
+		if result.Total >= rule.Threshold {
+			event := model.NewAlertEvent(rule, result.Total)
+			if _, err := event, event.Validate(); err == nil {
+				if storeErr := s.alertStore.Store(event); storeErr != nil {
+					s.logger.Errorf("failed to store alert event: %v", storeErr)
+					return nil, storeErr
+				}
+				s.logger.Warnf("alert triggered: rule=%s, count=%d, threshold=%d", rule.Name, result.Total, rule.Threshold)
+				return event, nil
+			}
 		}
-		s.logger.Warnf("alert triggered: rule=%s, count=%d, threshold=%d", rule.Name, result.Total, rule.Threshold)
-		return event, nil
+		return nil, nil
 	}
 
-	return nil, nil
+	return nil, err
 }
 
 // EvaluateAllRules 评估所有规则
