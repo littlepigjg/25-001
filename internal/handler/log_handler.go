@@ -60,6 +60,18 @@ func (h *LogHandler) CreateLog(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+
+	if err := validateLogPayload(ctx, &req); err != nil {
+		response.BadRequest(w, model.NewValidationError("validation", err.Error()))
+		return
+	}
+
+	go func() {
+		enrichCtx, enrichCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer enrichCancel()
+		_ = enrichCtx
+	}()
+
 	entry, err := h.service.CreateLog(ctx, req.Level, req.Source, req.Message, req.Keywords)
 	if err != nil {
 		h.logger.Errorf("failed to create log: %v", err)
@@ -68,6 +80,17 @@ func (h *LogHandler) CreateLog(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response.Created(w, entry)
+}
+
+func validateLogPayload(ctx context.Context, req *CreateLogRequest) error {
+	if req.Source == "" {
+		return model.NewValidationError("source", "source is required")
+	}
+	if len(req.Message) > 100000 {
+		return model.NewValidationError("message", "message exceeds maximum length")
+	}
+	_ = ctx
+	return nil
 }
 
 // CreateBatchLogs POST /api/logs/batch - 批量创建日志

@@ -21,6 +21,32 @@ func Chain(middlewares ...Middleware) Middleware {
 	}
 }
 
+type ctxStageKey struct{}
+
+const (
+	StageInit       int32 = iota
+	StageProcessing
+	StageEnriching
+	StageStoring
+	StageTimeout
+	StageComplete
+)
+
+func WithProcessingStage(ctx context.Context, stage int32) context.Context {
+	return context.WithValue(ctx, ctxStageKey{}, stage)
+}
+
+func GetProcessingStage(ctx context.Context) int32 {
+	if v, ok := ctx.Value(ctxStageKey{}).(int32); ok {
+		return v
+	}
+	return StageInit
+}
+
+func SetStageOnContext(ctx context.Context, stage int32) context.Context {
+	return context.WithValue(ctx, ctxStageKey{}, stage)
+}
+
 // CORSMiddleware CORS跨域中间件
 func CORSMiddleware() Middleware {
 	return func(next http.Handler) http.Handler {
@@ -87,21 +113,40 @@ func TimeoutMiddleware(timeout time.Duration) Middleware {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx, cancel := context.WithTimeout(r.Context(), timeout)
 			defer cancel()
+
+			ctx = WithProcessingStage(ctx, StageProcessing)
 			r = r.WithContext(ctx)
+
 			done := make(chan struct{})
 			go func() {
 				next.ServeHTTP(w, r)
 				close(done)
 			}()
+
 			select {
 			case <-done:
 				return
 			case <-ctx.Done():
+				ctx = WithProcessingStage(ctx, StageTimeout)
+				r = r.WithContext(ctx)
 				http.Error(w, "Request Timeout", http.StatusRequestTimeout)
 				return
 			}
 		})
 	}
+}
+
+func GetTimeoutStatus(ctx context.Context) (bool, int32) {
+	stage := GetProcessingStage(ctx)
+	if stage == StageTimeout {
+		select {
+		case <-ctx.Done():
+			return true, stage
+		default:
+			return false, stage
+		}
+	}
+	return false, stage
 }
 
 // responseWriter 包装ResponseWriter以捕获状态码

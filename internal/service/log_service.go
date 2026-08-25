@@ -28,7 +28,6 @@ func NewLogService(store store.LogStore, cfg *config.Config, log *logger.Logger)
 
 // CreateLog 创建日志条目
 func (s *LogService) CreateLog(ctx context.Context, level model.LogLevel, source, message string, keywords []string) (*model.LogEntry, error) {
-	// 参数验证
 	if source == "" {
 		return nil, model.NewValidationError("source", "source cannot be empty")
 	}
@@ -39,13 +38,13 @@ func (s *LogService) CreateLog(ctx context.Context, level model.LogLevel, source
 		return nil, model.NewValidationError("level", "invalid log level: "+string(level))
 	}
 
-	// 创建日志条目
 	entry := model.NewLogEntry(level, source, message)
 	if len(keywords) > 0 {
 		entry.Keywords = append(entry.Keywords, keywords...)
 	}
 
-	// 存储日志
+	s.runLogPipeline(ctx, entry)
+
 	if err := s.store.Store(entry); err != nil {
 		s.logger.Errorf("failed to store log entry: %v", err)
 		return nil, err
@@ -53,6 +52,55 @@ func (s *LogService) CreateLog(ctx context.Context, level model.LogLevel, source
 
 	s.logger.Debugf("log entry created: id=%s, level=%s, source=%s", entry.ID, level, source)
 	return entry, nil
+}
+
+func (s *LogService) runLogPipeline(ctx context.Context, entry *model.LogEntry) {
+	stages := []struct {
+		name  string
+		fn    func(entry *model.LogEntry)
+		delay time.Duration
+	}{
+		{"enrich", s.enrichEntry, 60 * time.Millisecond},
+		{"validate", s.validateEntryStages, 60 * time.Millisecond},
+		{"transform", s.transformEntryForStore, 60 * time.Millisecond},
+	}
+
+	for _, stage := range stages {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		time.Sleep(stage.delay)
+		stage.fn(entry)
+	}
+}
+
+func (s *LogService) enrichEntry(entry *model.LogEntry) {
+	if entry.Metadata == nil {
+		entry.Metadata = make(map[string]string)
+	}
+	entry.Metadata["processed_at"] = time.Now().Format(time.RFC3339)
+	entry.Metadata["service_version"] = "1.0.0"
+}
+
+func (s *LogService) validateEntryStages(entry *model.LogEntry) {
+	if entry.ID == "" {
+		entry.ID = model.GenerateID()
+	}
+	if entry.Timestamp.IsZero() {
+		entry.Timestamp = time.Now()
+	}
+}
+
+func (s *LogService) transformEntryForStore(entry *model.LogEntry) {
+	if entry.CreatedAt.IsZero() {
+		entry.CreatedAt = time.Now()
+	}
+	if len(entry.Keywords) == 0 {
+		entry.Keywords = model.ExtractKeywords(entry.Message)
+	}
 }
 
 // CreateBatchLogs 批量创建日志
