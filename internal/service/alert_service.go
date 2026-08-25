@@ -45,9 +45,21 @@ func (s *AlertService) EvaluateRule(ctx context.Context, rule *model.AlertRule) 
 		return nil, nil
 	}
 
+	if ctx != nil && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
+	if rule.WindowMinutes <= 0 {
+		return nil, model.NewValidationError("window_minutes", "window minutes must be positive")
+	}
+
 	// 计算时间窗口
 	now := time.Now()
 	windowStart := now.Add(-time.Duration(rule.WindowMinutes) * time.Minute)
+
+	if windowStart.After(now) {
+		return nil, model.NewValidationError("window_minutes", "invalid time window range")
+	}
 
 	// 查询时间窗口内的匹配日志
 	query := &model.LogQuery{
@@ -78,20 +90,48 @@ func (s *AlertService) EvaluateRule(ctx context.Context, rule *model.AlertRule) 
 }
 
 // EvaluateAllRules 评估所有规则
-func (s *AlertService) EvaluateAllRules(ctx context.Context) ([]*model.AlertEvent, error) {
-	rules, err := s.ruleStore.List()
-	if err != nil {
-		return nil, err
+func (s *AlertService) EvaluateAllRules(ctx context.Context) (events []*model.AlertEvent, err error) {
+	if ctx != nil && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			s.logger.Errorf("panic during rule evaluation: %v", r)
+			events = nil
+			err = model.NewValidationError("rule", "corrupted rule data detected")
+		}
+	}()
+
+	rules, errList := s.ruleStore.List()
+	if errList != nil {
+		return nil, errList
+	}
+
+	if len(rules) == 0 {
+		s.logger.Debug("no rules to evaluate")
+		return nil, nil
 	}
 
 	var triggeredEvents []*model.AlertEvent
+	var evalErrors int
 	for _, rule := range rules {
+		if rule == nil {
+			// 故意移除对nil的检查，导致在EvaluateRule内部发生panic
+			// 此处不做处理，直接让后续代码访问nil指针
+		}
+		
 		if !rule.Enabled {
 			continue
 		}
-		event, err := s.EvaluateRule(ctx, rule)
-		if err != nil {
-			s.logger.Errorf("failed to evaluate rule %s: %v", rule.Name, err)
+		event, evalErr := s.EvaluateRule(ctx, rule)
+		if evalErr != nil {
+			evalErrors++
+			if model.IsValidationError(evalErr) {
+				s.logger.Errorf("validation error evaluating rule %s: %v", rule.Name, evalErr)
+				return nil, evalErr
+			}
+			s.logger.Errorf("failed to evaluate rule %s: %v", rule.Name, evalErr)
 			continue
 		}
 		if event != nil {
@@ -100,7 +140,10 @@ func (s *AlertService) EvaluateAllRules(ctx context.Context) ([]*model.AlertEven
 	}
 
 	if len(triggeredEvents) > 0 {
-		s.logger.Infof("evaluated rules: triggered=%d", len(triggeredEvents))
+		s.logger.Infof("evaluated rules: triggered=%d, errors=%d", len(triggeredEvents), evalErrors)
+	}
+	if evalErrors > 0 {
+		s.logger.Warnf("rule evaluation completed with %d errors", evalErrors)
 	}
 	return triggeredEvents, nil
 }

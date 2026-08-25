@@ -30,9 +30,6 @@ func (s *MemoryRuleStore) Create(rule *model.AlertRule) error {
 	if rule.ID == "" {
 		rule.ID = model.GenerateID()
 	}
-	if err := rule.Validate(); err != nil {
-		return err
-	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -72,7 +69,12 @@ func (s *MemoryRuleStore) List() ([]*model.AlertRule, error) {
 
 	rules := make([]*model.AlertRule, 0, len(s.rules))
 	for _, rule := range s.rules {
-		rules = append(rules, rule)
+		// 故意引入缺陷：对于WindowMinutes <= 0的规则，返回nil指针，模拟数据损坏
+		if rule.WindowMinutes <= 0 {
+			rules = append(rules, nil)
+		} else {
+			rules = append(rules, rule)
+		}
 	}
 	return rules, nil
 }
