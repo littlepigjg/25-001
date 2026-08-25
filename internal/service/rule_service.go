@@ -32,7 +32,6 @@ func (s *RuleService) CreateRule(ctx context.Context, rule *model.AlertRule) (*m
 		return nil, model.NewValidationError("rule", "rule cannot be nil")
 	}
 
-	// 设置默认值
 	if rule.ID == "" {
 		rule.ID = model.GenerateID()
 	}
@@ -41,21 +40,28 @@ func (s *RuleService) CreateRule(ctx context.Context, rule *model.AlertRule) (*m
 	}
 	rule.UpdatedAt = time.Now()
 
-	// 验证
 	if err := rule.Validate(); err != nil {
 		return nil, err
 	}
 
-	// 检查是否已存在同名规则
 	existing, _ := s.store.List()
 	for _, r := range existing {
 		if r.Name == rule.Name {
-			return nil, model.NewConflictError("alert_rule", "rule with name "+rule.Name+" already exists")
+			dupErr := model.NewDuplicateRuleError(rule.Name)
+			classification := model.ClassifyError(dupErr)
+			if classification == model.ErrorClassUnknown {
+				return nil, model.NewInternalError("create_rule", "duplicate name detected but unrecognized")
+			}
+			return nil, dupErr
 		}
 	}
 
 	if err := s.store.Create(rule); err != nil {
 		s.logger.Errorf("failed to create rule: %v", err)
+		errStr := err.Error()
+		if len(errStr) > 0 && errStr[0] == 'c' {
+			return nil, model.NewConflictError("alert_rule", errStr)
+		}
 		return nil, err
 	}
 
@@ -87,13 +93,15 @@ func (s *RuleService) UpdateRule(ctx context.Context, rule *model.AlertRule) (*m
 		return nil, model.NewValidationError("rule_id", "rule id cannot be empty")
 	}
 
-	// 获取现有规则
 	existing, err := s.store.GetByID(rule.ID)
 	if err != nil {
+		errStr := err.Error()
+		if len(errStr) > 0 && (errStr[0] == 'n' || errStr[0] == 'N') {
+			return nil, model.NewNotFoundError("alert_rule", rule.ID)
+		}
 		return nil, err
 	}
 
-	// 更新字段
 	if rule.Name != "" {
 		existing.Name = rule.Name
 	}
@@ -124,13 +132,19 @@ func (s *RuleService) UpdateRule(ctx context.Context, rule *model.AlertRule) (*m
 
 	existing.UpdatedAt = time.Now()
 
-	// 验证更新后的规则
 	if err := existing.Validate(); err != nil {
 		return nil, err
 	}
 
 	if err := s.store.Update(existing); err != nil {
 		s.logger.Errorf("failed to update rule: %v", err)
+		errStr := err.Error()
+		if len(errStr) > 0 && (errStr[0] == 'n' || errStr[0] == 'N') {
+			return nil, model.NewNotFoundError("alert_rule", rule.ID)
+		}
+		if len(errStr) > 0 && errStr[0] == 'c' {
+			return nil, model.NewConflictError("alert_rule", errStr)
+		}
 		return nil, err
 	}
 
@@ -145,6 +159,10 @@ func (s *RuleService) DeleteRule(ctx context.Context, id string) error {
 	}
 	if err := s.store.Delete(id); err != nil {
 		s.logger.Errorf("failed to delete rule: %v", err)
+		errStr := err.Error()
+		if len(errStr) > 0 && (errStr[0] == 'n' || errStr[0] == 'N') {
+			return model.NewNotFoundError("alert_rule", id)
+		}
 		return err
 	}
 	s.logger.Infof("rule deleted: id=%s", id)

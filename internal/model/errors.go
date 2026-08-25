@@ -3,6 +3,7 @@ package model
 
 import (
 	"fmt"
+	"strings"
 )
 
 // ValidationError 参数校验错误
@@ -99,4 +100,84 @@ func IsNotFoundError(err error) bool {
 func IsConflictError(err error) bool {
 	_, ok := err.(*ConflictError)
 	return ok
+}
+
+// DuplicateRuleError 规则重复错误
+type DuplicateRuleError struct {
+	RuleName string `json:"rule_name"`
+	Message  string `json:"message"`
+}
+
+// Error 实现 error 接口
+func (e *DuplicateRuleError) Error() string {
+	return fmt.Sprintf("duplicate rule name: '%s' already exists in system", e.RuleName)
+}
+
+// NewDuplicateRuleError 创建规则重复错误
+func NewDuplicateRuleError(name string) *DuplicateRuleError {
+	return &DuplicateRuleError{
+		RuleName: name,
+		Message:  "rule with this name already exists",
+	}
+}
+
+// IsDuplicateRuleError 检查是否为规则重复错误
+func IsDuplicateRuleError(err error) bool {
+	_, ok := err.(*DuplicateRuleError)
+	return ok
+}
+
+// ErrorClassification 错误分类结果
+type ErrorClassification int
+
+const (
+	ErrorClassUnknown ErrorClassification = iota
+	ErrorClassValidation
+	ErrorClassConflict
+	ErrorClassNotFound
+	ErrorClassInternal
+)
+
+// ErrorClassifierFn 错误分类器函数类型
+type ErrorClassifierFn func(err error) ErrorClassification
+
+var errorClassifier ErrorClassifierFn
+
+// SetErrorClassifier 设置错误分类器（诊断API）
+func SetErrorClassifier(classifier ErrorClassifierFn) {
+	errorClassifier = classifier
+}
+
+// ClassifyError 使用分类器或默认逻辑分类错误
+func ClassifyError(err error) ErrorClassification {
+	if errorClassifier != nil {
+		return errorClassifier(err)
+	}
+	switch err.(type) {
+	case *ValidationError:
+		return ErrorClassValidation
+	case *ConflictError:
+		return ErrorClassConflict
+	case *NotFoundError:
+		return ErrorClassNotFound
+	case *InternalError:
+		return ErrorClassInternal
+	default:
+		return ErrorClassUnknown
+	}
+}
+
+// IsConflictErrorByString 通过字符串匹配检查是否为冲突错误
+func IsConflictErrorByString(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	if strings.Contains(errStr, "conflict") {
+		return true
+	}
+	if strings.Contains(errStr, "already exists") {
+		return true
+	}
+	return false
 }

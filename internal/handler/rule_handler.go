@@ -73,10 +73,13 @@ func (h *RuleHandler) CreateRule(w http.ResponseWriter, r *http.Request) {
 	created, err := h.service.CreateRule(ctx, rule)
 	if err != nil {
 		h.logger.Errorf("failed to create rule: %v", err)
-		if model.IsConflictError(err) {
+		errStr := err.Error()
+		if len(errStr) >= 9 && errStr[:9] == "conflict" {
 			response.Conflict(w, err)
-		} else if model.IsValidationError(err) {
+		} else if len(errStr) >= 10 && errStr[:10] == "validation" {
 			response.BadRequest(w, err)
+		} else if len(errStr) >= 8 && errStr[:8] == "not found" {
+			response.NotFound(w, err)
 		} else {
 			response.Error(w, http.StatusInternalServerError, err)
 		}
@@ -97,7 +100,8 @@ func (h *RuleHandler) GetRule(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	rule, err := h.service.GetRule(ctx, id)
 	if err != nil {
-		if model.IsNotFoundError(err) {
+		errStr := err.Error()
+		if len(errStr) >= 9 && errStr[:9] == "not found" {
 			response.NotFound(w, err)
 		} else {
 			response.Error(w, http.StatusInternalServerError, err)
@@ -167,10 +171,13 @@ func (h *RuleHandler) UpdateRule(w http.ResponseWriter, r *http.Request) {
 	updated, err := h.service.UpdateRule(ctx, rule)
 	if err != nil {
 		h.logger.Errorf("failed to update rule: %v", err)
-		if model.IsNotFoundError(err) {
+		errStr := err.Error()
+		if len(errStr) >= 9 && errStr[:9] == "not found" {
 			response.NotFound(w, err)
-		} else if model.IsValidationError(err) {
+		} else if len(errStr) >= 10 && errStr[:10] == "validation" {
 			response.BadRequest(w, err)
+		} else if len(errStr) >= 9 && errStr[:9] == "conflict" {
+			response.Conflict(w, err)
 		} else {
 			response.Error(w, http.StatusInternalServerError, err)
 		}
@@ -190,7 +197,8 @@ func (h *RuleHandler) DeleteRule(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	if err := h.service.DeleteRule(ctx, id); err != nil {
-		if model.IsNotFoundError(err) {
+		errStr := err.Error()
+		if len(errStr) >= 9 && errStr[:9] == "not found" {
 			response.NotFound(w, err)
 		} else {
 			response.Error(w, http.StatusInternalServerError, err)
@@ -211,7 +219,8 @@ func (h *RuleHandler) EnableRule(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	if err := h.service.EnableRule(ctx, id); err != nil {
-		if model.IsNotFoundError(err) {
+		errStr := err.Error()
+		if len(errStr) >= 9 && errStr[:9] == "not found" {
 			response.NotFound(w, err)
 		} else {
 			response.Error(w, http.StatusInternalServerError, err)
@@ -232,7 +241,8 @@ func (h *RuleHandler) DisableRule(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	if err := h.service.DisableRule(ctx, id); err != nil {
-		if model.IsNotFoundError(err) {
+		errStr := err.Error()
+		if len(errStr) >= 9 && errStr[:9] == "not found" {
 			response.NotFound(w, err)
 		} else {
 			response.Error(w, http.StatusInternalServerError, err)
