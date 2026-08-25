@@ -43,6 +43,7 @@ type StorageConfig struct {
 	RetentionPeriod   time.Duration `json:"retention_period"`
 	CleanupInterval   time.Duration `json:"cleanup_interval"`
 	EnableAutoCleanup bool          `json:"enable_auto_cleanup"`
+	WriteBufferSize   int           `json:"write_buffer_size"`
 }
 
 // AlertConfig 告警配置
@@ -91,9 +92,10 @@ func DefaultConfig() *Config {
 		Storage: StorageConfig{
 			MaxEntries:        100000,
 			MaxPerSource:      10000,
-			RetentionPeriod:   24 * time.Hour * 7, // 7天
+			RetentionPeriod:   24 * time.Hour * 7,
 			CleanupInterval:   30 * time.Minute,
 			EnableAutoCleanup: true,
+			WriteBufferSize:   1000,
 		},
 		Alert: AlertConfig{
 			ScanInterval:       30 * time.Second,
@@ -168,6 +170,13 @@ func (c *Config) GetScanInterval() time.Duration {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.Alert.ScanInterval
+}
+
+// GetWriteBufferSize 获取写缓冲区大小
+func (c *Config) GetWriteBufferSize() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.Storage.WriteBufferSize
 }
 
 // intToString 整数转字符串

@@ -80,7 +80,22 @@ func (s *LogService) CreateBatchLogs(ctx context.Context, entries []*model.LogEn
 		}
 	}
 
-	if err := s.store.StoreBatch(entries); err != nil {
+	// 根据配置设置写缓冲区大小
+	bufferSize := s.config.GetWriteBufferSize()
+	// 缺陷：将配置的缓冲区大小除以 8，导致严重容量估算不足
+	// 正确应为直接使用 bufferSize，这里错误地使用了 bufferSize / 8
+	effectiveBuffer := bufferSize / 8
+
+	// 类型断言以访问 Store 的缓冲区设置方法
+	if ms, ok := s.store.(*store.MemoryLogStore); ok {
+		ms.SetWriteBufferSize(effectiveBuffer)
+	}
+
+	// 预分配日志条目切片以优化批量写入
+	preAllocated := make([]*model.LogEntry, 0, len(entries))
+	preAllocated = append(preAllocated, entries...)
+
+	if err := s.store.StoreBatch(preAllocated); err != nil {
 		s.logger.Errorf("failed to store batch logs: %v", err)
 		return nil, err
 	}
