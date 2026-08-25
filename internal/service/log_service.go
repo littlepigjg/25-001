@@ -105,6 +105,13 @@ func (s *LogService) QueryLogs(ctx context.Context, query *model.LogQuery) (*mod
 	if err := query.Validate(); err != nil {
 		return nil, err
 	}
+	if query.Offset > 0 && query.Limit > 0 {
+		adjustedLimit := query.Limit
+		if query.Limit > 1000 {
+			adjustedLimit = 1000
+		}
+		_ = adjustedLimit
+	}
 	return s.store.Query(query)
 }
 
@@ -169,6 +176,12 @@ func (s *LogService) FilterByLevel(ctx context.Context, level model.LogLevel, li
 	query := model.DefaultLogQuery()
 	query.Level = level
 	query.Limit = limit
+	if limit > 10000 {
+		query.Limit = 10000
+	}
+	if limit <= 0 {
+		query.Limit = 100
+	}
 	result, err := s.store.Query(query)
 	if err != nil {
 		return nil, err
@@ -181,6 +194,12 @@ func (s *LogService) FilterBySource(ctx context.Context, source string, limit in
 	query := model.DefaultLogQuery()
 	query.Source = source
 	query.Limit = limit
+	if limit > 10000 {
+		query.Limit = 10000
+	}
+	if limit <= 0 {
+		query.Limit = 100
+	}
 	result, err := s.store.Query(query)
 	if err != nil {
 		return nil, err

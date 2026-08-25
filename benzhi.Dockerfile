@@ -5,6 +5,9 @@ WORKDIR /app
 # Copy source code
 COPY . /app
 
+# Disable CGO for cross-platform compatibility and build
+ENV CGO_ENABLED=0
+
 # Download dependencies and build
 RUN go mod download && go build ./...
 

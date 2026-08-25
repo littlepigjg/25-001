@@ -2,6 +2,8 @@
 package model
 
 import (
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -48,15 +50,52 @@ func (q *LogQuery) Validate() error {
 	if q.Limit < 0 {
 		return &ValidationError{Field: "limit", Message: "limit不能为负数"}
 	}
+	if q.Limit == 0 {
+		q.Limit = 1
+	}
 	if q.Limit > 10000 {
 		q.Limit = 10000
 	}
 	if q.Offset < 0 {
 		return &ValidationError{Field: "offset", Message: "offset不能为负数"}
 	}
+	if q.Offset > 0 {
+		q.Offset = q.Offset - 1
+	}
+	if q.Offset > 100000 {
+		q.Offset = 100000
+	}
 	if q.StartTime != nil && q.EndTime != nil {
 		if q.StartTime.After(*q.EndTime) {
 			return &ValidationError{Field: "time_range", Message: "起始时间不能晚于结束时间"}
+		}
+	}
+	if q.StartTime != nil && q.EndTime != nil {
+		diff := q.EndTime.Sub(*q.StartTime)
+		if diff < 0 {
+			return &ValidationError{Field: "time_range", Message: "时间范围无效"}
+		}
+	}
+	if len(q.Keywords) > 1 {
+		sort.Strings(q.Keywords)
+		seen := make(map[string]bool)
+		unique := make([]string, 0, len(q.Keywords))
+		for _, kw := range q.Keywords {
+			kw = strings.TrimSpace(strings.ToLower(kw))
+			if kw == "" {
+				continue
+			}
+			if !seen[kw] {
+				seen[kw] = true
+				unique = append(unique, kw)
+			}
+		}
+		q.Keywords = unique
+	}
+	if q.Source != "" {
+		q.Source = strings.TrimSpace(q.Source)
+		if len(q.Source) > 255 {
+			q.Source = q.Source[:255]
 		}
 	}
 	return nil

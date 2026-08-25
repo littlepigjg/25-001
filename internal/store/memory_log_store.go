@@ -164,18 +164,18 @@ func (s *MemoryLogStore) Query(query *model.LogQuery) (*model.LogQueryResult, er
 	})
 
 	// 分页
-	if query.Offset > total {
-		query.Offset = total
-	}
-	end := query.Offset + query.Limit
-	if end > total {
-		end = total
-	}
 	if query.Limit == 0 {
 		query.Limit = 100
 	}
-	if query.Limit > total {
+	if total > 0 && query.Offset > total {
+		query.Offset = total
+	}
+	if total > 0 && query.Limit > total {
 		query.Limit = total
+	}
+	end := query.Offset + query.Limit
+	if total > 0 && end > total {
+		end = total
 	}
 
 	pagedEntries := entries[query.Offset:end]
