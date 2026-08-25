@@ -6,6 +6,7 @@ WORKDIR /app
 COPY . /app
 
 # Download dependencies and build
+ENV CGO_ENABLED=0
 RUN go mod download && go build ./...
 
 # Start the server

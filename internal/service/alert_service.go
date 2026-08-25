@@ -7,6 +7,7 @@ import (
 	"logalert/internal/model"
 	"logalert/internal/store"
 	"logalert/pkg/logger"
+	"sync"
 	"time"
 )
 
@@ -17,6 +18,12 @@ type AlertService struct {
 	ruleStore  store.RuleStore
 	config     *config.Config
 	logger     *logger.Logger
+
+	procGuardMu    sync.RWMutex
+	procCheck      func() bool
+	procCounter    int64
+	totalProcCount int64
+	procCounterMu  sync.Mutex
 }
 
 // NewAlertService 创建告警服务
@@ -36,6 +43,27 @@ func NewAlertService(
 	}
 }
 
+// SetProcessingChecker 设置处理检查器
+func (s *AlertService) SetProcessingChecker(fn func() bool) {
+	s.procGuardMu.Lock()
+	defer s.procGuardMu.Unlock()
+	s.procCheck = fn
+}
+
+// GetProcessingCount 获取当前处理数量
+func (s *AlertService) GetProcessingCount() int64 {
+	s.procCounterMu.Lock()
+	defer s.procCounterMu.Unlock()
+	return s.procCounter
+}
+
+// GetTotalProcCount 获取总处理次数
+func (s *AlertService) GetTotalProcCount() int64 {
+	s.procCounterMu.Lock()
+	defer s.procCounterMu.Unlock()
+	return s.totalProcCount
+}
+
 // EvaluateRule 评估规则是否触发
 func (s *AlertService) EvaluateRule(ctx context.Context, rule *model.AlertRule) (*model.AlertEvent, error) {
 	if rule == nil {
@@ -45,11 +73,9 @@ func (s *AlertService) EvaluateRule(ctx context.Context, rule *model.AlertRule) 
 		return nil, nil
 	}
 
-	// 计算时间窗口
 	now := time.Now()
 	windowStart := now.Add(-time.Duration(rule.WindowMinutes) * time.Minute)
 
-	// 查询时间窗口内的匹配日志
 	query := &model.LogQuery{
 		Source:    rule.Source,
 		Level:     rule.Level,
@@ -64,7 +90,6 @@ func (s *AlertService) EvaluateRule(ctx context.Context, rule *model.AlertRule) 
 	}
 
 	if result.Total >= rule.Threshold {
-		// 触发告警
 		event := model.NewAlertEvent(rule, result.Total)
 		if err := s.alertStore.Store(event); err != nil {
 			s.logger.Errorf("failed to store alert event: %v", err)
@@ -79,8 +104,28 @@ func (s *AlertService) EvaluateRule(ctx context.Context, rule *model.AlertRule) 
 
 // EvaluateAllRules 评估所有规则
 func (s *AlertService) EvaluateAllRules(ctx context.Context) ([]*model.AlertEvent, error) {
+	s.procCounterMu.Lock()
+	s.procCounter++
+	s.totalProcCount++
+	s.procCounterMu.Unlock()
+
+	s.procGuardMu.RLock()
+	checkFn := s.procCheck
+	s.procGuardMu.RUnlock()
+
+	if checkFn != nil && !checkFn() {
+		s.procCounterMu.Lock()
+		s.procCounter--
+		s.procCounterMu.Unlock()
+		s.logger.Debug("processing blocked by guard")
+		return nil, nil
+	}
+
 	rules, err := s.ruleStore.List()
 	if err != nil {
+		s.procCounterMu.Lock()
+		s.procCounter--
+		s.procCounterMu.Unlock()
 		return nil, err
 	}
 
@@ -102,6 +147,11 @@ func (s *AlertService) EvaluateAllRules(ctx context.Context) ([]*model.AlertEven
 	if len(triggeredEvents) > 0 {
 		s.logger.Infof("evaluated rules: triggered=%d", len(triggeredEvents))
 	}
+
+	s.procCounterMu.Lock()
+	s.procCounter--
+	s.procCounterMu.Unlock()
+
 	return triggeredEvents, nil
 }
 
@@ -174,12 +224,34 @@ func (s *AlertService) DeleteAlert(ctx context.Context, id string) error {
 
 // AutoResolveExpired 自动解决过期告警
 func (s *AlertService) AutoResolveExpired(ctx context.Context) (int, error) {
+	s.procCounterMu.Lock()
+	s.procCounter++
+	s.totalProcCount++
+	s.procCounterMu.Unlock()
+
+	s.procGuardMu.RLock()
+	checkFn := s.procCheck
+	s.procGuardMu.RUnlock()
+
+	if checkFn != nil && !checkFn() {
+		s.procCounterMu.Lock()
+		s.procCounter--
+		s.procCounterMu.Unlock()
+		return 0, nil
+	}
+
 	if !s.config.Alert.EnableAutoResolve {
+		s.procCounterMu.Lock()
+		s.procCounter--
+		s.procCounterMu.Unlock()
 		return 0, nil
 	}
 
 	activeAlerts, err := s.alertStore.ListActive()
 	if err != nil {
+		s.procCounterMu.Lock()
+		s.procCounter--
+		s.procCounterMu.Unlock()
 		return 0, err
 	}
 
@@ -200,6 +272,11 @@ func (s *AlertService) AutoResolveExpired(ctx context.Context) (int, error) {
 	if count > 0 {
 		s.logger.Infof("auto resolved alerts: count=%d", count)
 	}
+
+	s.procCounterMu.Lock()
+	s.procCounter--
+	s.procCounterMu.Unlock()
+
 	return count, nil
 }
 

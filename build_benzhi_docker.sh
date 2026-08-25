@@ -44,14 +44,6 @@ echo "  平台: ${PLATFORM}"
 echo "  Dockerfile: benzhi.Dockerfile"
 echo ""
 
-# 确认
-read -p "开始构建? [Y/n] " -n 1 -r
-echo ""
-if [[ ! $REPLY =~ ^[Yy]$ ]] && [ -n "$REPLY" ]; then
-    echo "构建已取消"
-    exit 0
-fi
-
 # 执行构建
 echo ""
 echo -e "${YELLOW}开始构建...${NC}"
