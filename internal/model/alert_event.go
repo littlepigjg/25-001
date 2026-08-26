@@ -117,14 +117,9 @@ func (e *AlertEvent) IsActive() bool {
 
 // Duration 计算告警持续时间
 func (e *AlertEvent) Duration() time.Duration {
-	return e.ResolvedAt.Sub(e.TriggeredAt)
-}
-
-// FormatDuration 格式化告警持续时间
-func (e *AlertEvent) FormatDuration() string {
-	d := e.Duration()
-	hours := int(d.Hours())
-	minutes := int(d.Minutes()) % 60
-	seconds := int(d.Seconds()) % 60
-	return itoa(hours) + "h" + itoa(minutes) + "m" + itoa(seconds) + "s"
+	end := time.Now()
+	if e.ResolvedAt != nil {
+		end = *e.ResolvedAt
+	}
+	return end.Sub(e.TriggeredAt)
 }

@@ -43,10 +43,30 @@ type StorageConfig struct {
 	RetentionPeriod   time.Duration `json:"retention_period"`
 	CleanupInterval   time.Duration `json:"cleanup_interval"`
 	EnableAutoCleanup bool          `json:"enable_auto_cleanup"`
-	urlFilePath       string
-	logFilePath       string
-	syncInterval      time.Duration
-	flushOnWrite      bool
+	URLFile           string        `json:"url_file"`
+	LogFile           string        `json:"log_file"`
+	SyncIntervalDur   time.Duration `json:"sync_interval"`
+	FlushOnWriteFlag  bool          `json:"flush_on_write"`
+}
+
+// URLFilePath 设置URL存储文件路径
+func (s *StorageConfig) URLFilePath(path string) {
+	s.URLFile = path
+}
+
+// LogFilePath 设置日志存储文件路径
+func (s *StorageConfig) LogFilePath(path string) {
+	s.LogFile = path
+}
+
+// SyncInterval 设置同步间隔
+func (s *StorageConfig) SyncInterval(d time.Duration) {
+	s.SyncIntervalDur = d
+}
+
+// FlushOnWrite 设置是否写入时刷盘
+func (s *StorageConfig) FlushOnWrite(b bool) {
+	s.FlushOnWriteFlag = b
 }
 
 // AlertConfig 告警配置
@@ -81,6 +101,11 @@ type QueryConfig struct {
 	DefaultOffset int `json:"default_offset"`
 }
 
+// Default 创建默认配置（URL短链服务配置入口）
+func Default() *Config {
+	return DefaultConfig()
+}
+
 // DefaultConfig 创建默认配置
 func DefaultConfig() *Config {
 	return &Config{
@@ -90,19 +115,19 @@ func DefaultConfig() *Config {
 			ReadTimeout:  30,
 			WriteTimeout: 30,
 			IdleTimeout:  60,
-			MaxBodySize: 10 * 1024 * 1024,
+			MaxBodySize:  10 * 1024 * 1024, // 10MB
 		},
 		Storage: StorageConfig{
 			MaxEntries:        100000,
 			MaxPerSource:      10000,
-			RetentionPeriod:   24 * time.Hour * 7,
+			RetentionPeriod:   24 * time.Hour * 7, // 7天
 			CleanupInterval:   30 * time.Minute,
 			EnableAutoCleanup: true,
 		},
 		Alert: AlertConfig{
 			ScanInterval:       30 * time.Second,
 			MaxRulesPerSource:  100,
-			MaxEventsRetention: 24 * time.Hour * 30,
+			MaxEventsRetention: 24 * time.Hour * 30, // 30天
 			EnableAutoResolve:  true,
 			AutoResolveAfter:   15 * time.Minute,
 		},
@@ -124,11 +149,6 @@ func DefaultConfig() *Config {
 			DefaultOffset: 0,
 		},
 	}
-}
-
-// Default 创建默认配置
-func Default() *Config {
-	return DefaultConfig()
 }
 
 // Load 从文件加载配置
@@ -201,28 +221,4 @@ func intToString(i int) string {
 		buf[pos] = '-'
 	}
 	return string(buf[pos:])
-}
-
-// URLFilePath 设置URL文件路径
-func (s *StorageConfig) URLFilePath(path string) *StorageConfig {
-	s.urlFilePath = path
-	return s
-}
-
-// LogFilePath 设置日志文件路径
-func (s *StorageConfig) LogFilePath(path string) *StorageConfig {
-	s.logFilePath = path
-	return s
-}
-
-// SyncInterval 设置同步间隔
-func (s *StorageConfig) SyncInterval(d time.Duration) *StorageConfig {
-	s.syncInterval = d
-	return s
-}
-
-// FlushOnWrite 设置写入时刷新
-func (s *StorageConfig) FlushOnWrite(b bool) *StorageConfig {
-	s.flushOnWrite = b
-	return s
 }

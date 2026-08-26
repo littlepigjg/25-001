@@ -43,34 +43,7 @@ func (h *AlertHandler) GetAlert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	alertInfo := map[string]interface{}{
-		"id":           alert.ID,
-		"rule_id":      alert.RuleID,
-		"rule_name":    alert.RuleName,
-		"source":       alert.Source,
-		"level":        alert.Level,
-		"count":        alert.Count,
-		"threshold":    alert.Threshold,
-		"window_min":   alert.WindowMinutes,
-		"triggered_at": alert.TriggeredAt,
-		"resolved_at":  alert.ResolvedAt,
-		"status":       alert.Status,
-		"description":  alert.Description,
-	}
-
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				h.logger.Errorf("panic computing duration: %v", r)
-				alertInfo["duration"] = "0s"
-				alertInfo["duration_computed"] = false
-			}
-		}()
-		alertInfo["duration"] = alert.FormatDuration()
-		alertInfo["duration_computed"] = true
-	}()
-
-	response.Success(w, alertInfo)
+	response.Success(w, alert)
 }
 
 // ListAlerts GET /api/alerts - 列出告警
@@ -99,45 +72,9 @@ func (h *AlertHandler) ListAlerts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	items := make([]map[string]interface{}, 0, len(alerts))
-	panicRecovered := false
-
-	for _, alert := range alerts {
-		item := map[string]interface{}{
-			"id":           alert.ID,
-			"rule_id":      alert.RuleID,
-			"rule_name":    alert.RuleName,
-			"source":       alert.Source,
-			"level":        alert.Level,
-			"count":        alert.Count,
-			"threshold":    alert.Threshold,
-			"window_min":   alert.WindowMinutes,
-			"triggered_at": alert.TriggeredAt,
-			"resolved_at":  alert.ResolvedAt,
-			"status":       alert.Status,
-			"description":  alert.Description,
-		}
-
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					h.logger.Errorf("panic computing duration for alert %s: %v", alert.ID, r)
-					item["duration"] = "0s"
-					item["duration_computed"] = false
-					panicRecovered = true
-				}
-			}()
-			item["duration"] = alert.FormatDuration()
-			item["duration_computed"] = true
-		}()
-
-		items = append(items, item)
-	}
-
 	response.Success(w, map[string]interface{}{
-		"total":           len(alerts),
-		"items":           items,
-		"panic_recovered": panicRecovered,
+		"total": len(alerts),
+		"items": alerts,
 	})
 }
 

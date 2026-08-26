@@ -37,10 +37,14 @@ func NewWithDetails(code int, message, details string) *Error {
 
 // Wrap 包装原始错误
 func Wrap(code int, message string, cause error) *Error {
+	var wrappedCause error
+	if cause != nil {
+		wrappedCause = fmt.Errorf("%s: %s", message, cause.Error())
+	}
 	return &Error{
 		Code:    code,
 		Message: message,
-		Cause:   cause,
+		Cause:   wrappedCause,
 	}
 }
 
