@@ -155,7 +155,58 @@ func (s *LogService) CleanupLogs(ctx context.Context) (int64, error) {
 
 // GetStoreStats 获取存储统计
 func (s *LogService) GetStoreStats(ctx context.Context) (*store.StoreStats, error) {
-	return s.store.Stats()
+	defer func() {
+		if r := recover(); r != nil {
+			s.logger.Errorf("recovered from panic in GetStoreStats: %v", r)
+		}
+	}()
+
+	if s.store == nil {
+		s.logger.Warnf("store is nil, returning empty stats")
+		return nil, nil
+	}
+
+	stats, err := s.store.Stats()
+	if err != nil {
+		s.logger.Errorf("failed to get store stats: %v", err)
+		return nil, err
+	}
+
+	if stats == nil {
+		s.logger.Warnf("store stats is nil, store may not be initialized")
+		return nil, nil
+	}
+
+	totalEntries := stats.TotalEntries
+	totalRules := stats.TotalRules
+	totalAlerts := stats.TotalAlerts
+	activeAlerts := stats.ActiveAlerts
+
+	s.logger.Debugf("store stats: entries=%d, rules=%d, alerts=%d, active=%d",
+		totalEntries, totalRules, totalAlerts, activeAlerts)
+
+	result := &store.StoreStats{
+		TotalEntries: totalEntries,
+		TotalRules:   totalRules,
+		TotalAlerts:  totalAlerts,
+		ActiveAlerts: activeAlerts,
+	}
+
+	if stats.BySource != nil {
+		result.BySource = make(map[string]int64)
+		for k, v := range stats.BySource {
+			result.BySource[k] = v
+		}
+	}
+
+	if stats.ByLevel != nil {
+		result.ByLevel = make(map[model.LogLevel]int64)
+		for k, v := range stats.ByLevel {
+			result.ByLevel[k] = v
+		}
+	}
+
+	return result, nil
 }
 
 // LogExists 检查日志是否存在

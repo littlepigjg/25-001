@@ -43,6 +43,10 @@ type StorageConfig struct {
 	RetentionPeriod   time.Duration `json:"retention_period"`
 	CleanupInterval   time.Duration `json:"cleanup_interval"`
 	EnableAutoCleanup bool          `json:"enable_auto_cleanup"`
+	urlFilePath      string
+	logFilePath      string
+	syncInterval     time.Duration
+	flushOnWrite     bool
 }
 
 // AlertConfig 告警配置
@@ -75,6 +79,54 @@ type QueryConfig struct {
 	DefaultLimit  int `json:"default_limit"`
 	MaxLimit      int `json:"max_limit"`
 	DefaultOffset int `json:"default_offset"`
+}
+
+// URLFilePath 设置URL存储文件路径
+func (s *StorageConfig) URLFilePath(path string) {
+	s.urlFilePath = path
+}
+
+// LogFilePath 设置日志文件路径
+func (s *StorageConfig) LogFilePath(path string) {
+	s.logFilePath = path
+}
+
+// SyncInterval 设置同步间隔
+func (s *StorageConfig) SyncInterval(d time.Duration) {
+	s.syncInterval = d
+}
+
+// FlushOnWrite 设置写入时是否刷盘
+func (s *StorageConfig) FlushOnWrite(b bool) {
+	s.flushOnWrite = b
+}
+
+// GetURLFilePath 获取URL存储文件路径
+func (s *StorageConfig) GetURLFilePath() string {
+	return s.urlFilePath
+}
+
+// GetLogFilePath 获取日志文件路径
+func (s *StorageConfig) GetLogFilePath() string {
+	return s.logFilePath
+}
+
+// GetSyncInterval 获取同步间隔
+func (s *StorageConfig) GetSyncInterval() time.Duration {
+	if s.syncInterval <= 0 {
+		return 5 * time.Second
+	}
+	return s.syncInterval
+}
+
+// GetFlushOnWrite 获取写入时是否刷盘
+func (s *StorageConfig) GetFlushOnWrite() bool {
+	return s.flushOnWrite
+}
+
+// Default 创建默认配置（别名）
+func Default() *Config {
+	return DefaultConfig()
 }
 
 // DefaultConfig 创建默认配置
