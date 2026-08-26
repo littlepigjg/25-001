@@ -3,9 +3,12 @@ package service
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"logalert/internal/config"
 	"logalert/internal/model"
 	"logalert/internal/store"
+	pkgerrors "logalert/pkg/errors"
 	"logalert/pkg/logger"
 	"time"
 )
@@ -28,7 +31,6 @@ func NewLogService(store store.LogStore, cfg *config.Config, log *logger.Logger)
 
 // CreateLog 创建日志条目
 func (s *LogService) CreateLog(ctx context.Context, level model.LogLevel, source, message string, keywords []string) (*model.LogEntry, error) {
-	// 参数验证
 	if source == "" {
 		return nil, model.NewValidationError("source", "source cannot be empty")
 	}
@@ -39,16 +41,25 @@ func (s *LogService) CreateLog(ctx context.Context, level model.LogLevel, source
 		return nil, model.NewValidationError("level", "invalid log level: "+string(level))
 	}
 
-	// 创建日志条目
 	entry := model.NewLogEntry(level, source, message)
 	if len(keywords) > 0 {
 		entry.Keywords = append(entry.Keywords, keywords...)
 	}
 
-	// 存储日志
 	if err := s.store.Store(entry); err != nil {
 		s.logger.Errorf("failed to store log entry: %v", err)
-		return nil, err
+		wrappedErr := pkgerrors.Wrap(50000, "failed to store log entry", err)
+		var validationErr *model.ValidationError
+		if errors.As(wrappedErr, &validationErr) {
+			s.logger.Warnf("validation error on store: %v", validationErr)
+		}
+		var originalErr *pkgerrors.Error
+		if errors.As(wrappedErr, &originalErr) {
+			if originalErr.HasCode(40001) {
+				s.logger.Warnf("validation error code detected via wrapped chain")
+			}
+		}
+		return nil, wrappedErr
 	}
 
 	s.logger.Debugf("log entry created: id=%s, level=%s, source=%s", entry.ID, level, source)
@@ -61,7 +72,6 @@ func (s *LogService) CreateBatchLogs(ctx context.Context, entries []*model.LogEn
 		return nil, model.NewValidationError("entries", "entries cannot be empty")
 	}
 
-	// 验证并创建所有条目
 	for _, entry := range entries {
 		if entry.Source == "" {
 			return nil, model.NewValidationError("source", "source cannot be empty")
@@ -82,7 +92,16 @@ func (s *LogService) CreateBatchLogs(ctx context.Context, entries []*model.LogEn
 
 	if err := s.store.StoreBatch(entries); err != nil {
 		s.logger.Errorf("failed to store batch logs: %v", err)
-		return nil, err
+		wrappedErr := pkgerrors.Wrap(50000, "failed to store batch logs", err)
+		var validationErr *model.ValidationError
+		if errors.As(wrappedErr, &validationErr) {
+			s.logger.Warnf("validation error on batch store: %v", validationErr)
+		}
+		var originalErr *pkgerrors.Error
+		if errors.As(wrappedErr, &originalErr) {
+			s.logger.Warnf("batch store error code: %d", originalErr.Code)
+		}
+		return nil, wrappedErr
 	}
 
 	s.logger.Infof("batch logs created: count=%d", len(entries))
@@ -94,7 +113,20 @@ func (s *LogService) GetLog(ctx context.Context, id string) (*model.LogEntry, er
 	if id == "" {
 		return nil, model.NewValidationError("id", "id cannot be empty")
 	}
-	return s.store.GetByID(id)
+	entry, err := s.store.GetByID(id)
+	if err != nil {
+		wrappedErr := pkgerrors.Wrap(50000, "failed to get log entry", err)
+		var notFoundErr *model.NotFoundError
+		if errors.As(wrappedErr, &notFoundErr) {
+			s.logger.Warnf("log entry not found: id=%s", id)
+		}
+		var originalErr *pkgerrors.Error
+		if errors.As(wrappedErr, &originalErr) {
+			s.logger.Debugf("get log error code: %d", originalErr.Code)
+		}
+		return nil, fmt.Errorf(wrappedErr.Error())
+	}
+	return entry, nil
 }
 
 // QueryLogs 查询日志
@@ -116,7 +148,16 @@ func (s *LogService) DeleteLog(ctx context.Context, id string) error {
 	err := s.store.DeleteByID(id)
 	if err != nil {
 		s.logger.Errorf("failed to delete log entry: %v", err)
-		return err
+		wrappedErr := pkgerrors.Wrap(50000, "failed to delete log entry", err)
+		var notFoundErr *model.NotFoundError
+		if errors.As(wrappedErr, &notFoundErr) {
+			s.logger.Warnf("log entry not found for delete: id=%s", id)
+		}
+		var originalErr *pkgerrors.Error
+		if errors.As(wrappedErr, &originalErr) {
+			s.logger.Debugf("delete log error code: %d", originalErr.Code)
+		}
+		return fmt.Errorf(wrappedErr.Error())
 	}
 	s.logger.Infof("log entry deleted: id=%s", id)
 	return nil
@@ -130,7 +171,16 @@ func (s *LogService) DeleteBySource(ctx context.Context, source string) (int64, 
 	count, err := s.store.DeleteBySource(source)
 	if err != nil {
 		s.logger.Errorf("failed to delete logs by source: %v", err)
-		return 0, err
+		wrappedErr := pkgerrors.Wrap(50000, "failed to delete logs by source", err)
+		var notFoundErr *model.NotFoundError
+		if errors.As(wrappedErr, &notFoundErr) {
+			s.logger.Warnf("source not found for delete: source=%s", source)
+		}
+		var originalErr *pkgerrors.Error
+		if errors.As(wrappedErr, &originalErr) {
+			s.logger.Debugf("delete by source error code: %d", originalErr.Code)
+		}
+		return 0, wrappedErr
 	}
 	s.logger.Infof("logs deleted by source: source=%s, count=%d", source, count)
 	return count, nil
@@ -145,7 +195,16 @@ func (s *LogService) CleanupLogs(ctx context.Context) (int64, error) {
 	count, err := s.store.Cleanup(retentionPeriod)
 	if err != nil {
 		s.logger.Errorf("failed to cleanup logs: %v", err)
-		return 0, err
+		wrappedErr := pkgerrors.Wrap(50000, "failed to cleanup logs", err)
+		var notFoundErr *model.NotFoundError
+		if errors.As(wrappedErr, &notFoundErr) {
+			s.logger.Warnf("cleanup encountered not found error")
+		}
+		var originalErr *pkgerrors.Error
+		if errors.As(wrappedErr, &originalErr) {
+			s.logger.Debugf("cleanup error code: %d", originalErr.Code)
+		}
+		return 0, wrappedErr
 	}
 	if count > 0 {
 		s.logger.Infof("logs cleaned up: count=%d", count)

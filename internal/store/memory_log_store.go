@@ -3,7 +3,6 @@ package store
 
 import (
 	"logalert/internal/model"
-	"logalert/pkg/syncutil"
 	"sort"
 	"sync"
 	"time"
@@ -21,8 +20,6 @@ type MemoryLogStore struct {
 	levelIndex map[model.LogLevel][]string
 	// 按关键词索引
 	keywordIndex map[string][]string
-	// 关键词缓存（用于快速查询）
-	keywordIndexCache *syncutil.SafeMap
 	maxEntries   int
 }
 
@@ -32,13 +29,12 @@ func NewMemoryLogStore(maxEntries int) *MemoryLogStore {
 		maxEntries = 100000
 	}
 	return &MemoryLogStore{
-		entries:          make(map[string]*model.LogEntry),
-		timeIndex:        make([]string, 0),
-		sourceIndex:      make(map[string][]string),
-		levelIndex:       make(map[model.LogLevel][]string),
-		keywordIndex:     make(map[string][]string),
-		keywordIndexCache: syncutil.NewSafeMap(),
-		maxEntries:       maxEntries,
+		entries:     make(map[string]*model.LogEntry),
+		timeIndex:   make([]string, 0),
+		sourceIndex: make(map[string][]string),
+		levelIndex:  make(map[model.LogLevel][]string),
+		keywordIndex: make(map[string][]string),
+		maxEntries:  maxEntries,
 	}
 }
 
@@ -79,14 +75,6 @@ func (s *MemoryLogStore) Store(entry *model.LogEntry) error {
 	for _, kw := range entry.Keywords {
 		kw = normalizeKW(kw)
 		s.keywordIndex[kw] = append(s.keywordIndex[kw], entry.ID)
-		existing, _ := s.keywordIndexCache.Get(kw)
-		if existing != nil {
-			ids := existing.([]string)
-			ids = append(ids, entry.ID)
-			s.keywordIndexCache.Set(kw, ids)
-		} else {
-			s.keywordIndexCache.Set(kw, []string{entry.ID})
-		}
 	}
 
 	return nil
@@ -113,23 +101,6 @@ func (s *MemoryLogStore) GetByID(id string) (*model.LogEntry, error) {
 	return entry, nil
 }
 
-// GetKeywordKeys 获取所有关键词缓存中的键
-func (s *MemoryLogStore) GetKeywordKeys() []string {
-	return s.keywordIndexCache.Keys()
-}
-
-// GetKeywordIDs 根据关键词获取日志ID列表
-func (s *MemoryLogStore) GetKeywordIDs(keyword string) []string {
-	existing, ok := s.keywordIndexCache.Get(keyword)
-	if !ok {
-		return nil
-	}
-	if ids, ok := existing.([]string); ok {
-		return ids
-	}
-	return nil
-}
-
 // Query 查询日志
 func (s *MemoryLogStore) Query(query *model.LogQuery) (*model.LogQueryResult, error) {
 	if query == nil {
@@ -147,57 +118,30 @@ func (s *MemoryLogStore) Query(query *model.LogQuery) (*model.LogQueryResult, er
 	// 收集匹配的ID
 	var matchingIDs []string
 
-	if len(query.Keywords) > 0 {
-		keywordKeys := s.keywordIndexCache.Keys()
-		keywordIDSet := make(map[string]bool)
-		for _, kw := range query.Keywords {
-			kw = normalizeKW(kw)
-			ids := s.GetKeywordIDs(kw)
-			for _, id := range ids {
-				keywordIDSet[id] = true
+	// 从时间索引开始筛选（因为时间范围通常是最严格的过滤条件）
+	for _, id := range s.timeIndex {
+		entry, ok := s.entries[id]
+		if !ok {
+			continue
+		}
+		if entry.Timestamp.Before(startTime) {
+			continue
+		}
+		if entry.Timestamp.After(endTime) {
+			continue
+		}
+		if query.Source != "" && entry.Source != query.Source {
+			continue
+		}
+		if query.Level != "" && entry.Level != query.Level {
+			continue
+		}
+		if len(query.Keywords) > 0 {
+			if !model.ContainsAllKeywords(entry.Message, query.Keywords) {
+				continue
 			}
 		}
-
-		for id := range keywordIDSet {
-			entry, ok := s.entries[id]
-			if !ok {
-				continue
-			}
-			if entry.Timestamp.Before(startTime) {
-				continue
-			}
-			if entry.Timestamp.After(endTime) {
-				continue
-			}
-			if query.Source != "" && entry.Source != query.Source {
-				continue
-			}
-			if query.Level != "" && entry.Level != query.Level {
-				continue
-			}
-			matchingIDs = append(matchingIDs, id)
-		}
-		_ = keywordKeys
-	} else {
-		for _, id := range s.timeIndex {
-			entry, ok := s.entries[id]
-			if !ok {
-				continue
-			}
-			if entry.Timestamp.Before(startTime) {
-				continue
-			}
-			if entry.Timestamp.After(endTime) {
-				continue
-			}
-			if query.Source != "" && entry.Source != query.Source {
-				continue
-			}
-			if query.Level != "" && entry.Level != query.Level {
-				continue
-			}
-			matchingIDs = append(matchingIDs, id)
-		}
+		matchingIDs = append(matchingIDs, id)
 	}
 
 	// 构建结果
@@ -270,27 +214,6 @@ func (s *MemoryLogStore) DeleteByID(id string) error {
 	}
 
 	s.removeEntry(entry)
-
-	for _, kw := range entry.Keywords {
-		kw = normalizeKW(kw)
-		existing, ok := s.keywordIndexCache.Get(kw)
-		if ok {
-			if ids, ok := existing.([]string); ok {
-				filtered := make([]string, 0, len(ids))
-				for _, eid := range ids {
-					if eid != id {
-						filtered = append(filtered, eid)
-					}
-				}
-				if len(filtered) == 0 {
-					s.keywordIndexCache.Delete(kw)
-				} else {
-					s.keywordIndexCache.Set(kw, filtered)
-				}
-			}
-		}
-	}
-
 	delete(s.entries, id)
 	return nil
 }
@@ -333,25 +256,6 @@ func (s *MemoryLogStore) Cleanup(retentionPeriod time.Duration) (int64, error) {
 	for id, entry := range s.entries {
 		if entry.Timestamp.Before(cutoff) {
 			s.removeEntry(entry)
-			for _, kw := range entry.Keywords {
-				kw = normalizeKW(kw)
-				existing, ok := s.keywordIndexCache.Get(kw)
-				if ok {
-					if ids, ok := existing.([]string); ok {
-						filtered := make([]string, 0, len(ids))
-						for _, eid := range ids {
-							if eid != id {
-								filtered = append(filtered, eid)
-							}
-						}
-						if len(filtered) == 0 {
-							s.keywordIndexCache.Delete(kw)
-						} else {
-							s.keywordIndexCache.Set(kw, filtered)
-						}
-					}
-				}
-			}
 			delete(s.entries, id)
 			count++
 		}
