@@ -5,8 +5,8 @@ WORKDIR /app
 # Copy source code
 COPY . /app
 
-# Download dependencies and build with CGO disabled for cross-platform compatibility
-RUN CGO_ENABLED=0 go mod download && CGO_ENABLED=0 go build ./...
+# Download dependencies and build
+RUN go mod download && go build ./...
 
 # Start the server
 CMD ["go", "run", "./cmd/server"]

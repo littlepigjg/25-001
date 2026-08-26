@@ -4,7 +4,6 @@ package service
 import (
 	"context"
 	"logalert/internal/config"
-	"logalert/internal/model"
 	"logalert/pkg/logger"
 	"sync"
 	"time"
@@ -127,25 +126,18 @@ func (s *SchedulerService) startAlertScan(ctx context.Context) {
 
 	s.wg.Add(1)
 	go func() {
+		defer s.wg.Done()
 		s.logger.Infof("alert scan started: interval=%v", interval)
 
 		for {
 			select {
 			case <-ticker.C:
-				if err := s.scanAlerts(ctx); err != nil {
-					s.logger.Errorf("alert scan error: %v", err)
-					if model.IsValidationError(err) {
-						s.logger.Error("validation error in alert scan, goroutine exiting")
-						return
-					}
-				}
+				s.scanAlerts(ctx)
 			case <-stopCh:
 				s.logger.Info("alert scan stopped")
-				s.wg.Done()
 				return
 			case <-ctx.Done():
 				s.logger.Info("alert scan context cancelled")
-				s.wg.Done()
 				return
 			}
 		}
@@ -153,24 +145,16 @@ func (s *SchedulerService) startAlertScan(ctx context.Context) {
 }
 
 // scanAlerts 执行告警扫描
-func (s *SchedulerService) scanAlerts(ctx context.Context) error {
-	if ctx != nil && ctx.Err() != nil {
-		return ctx.Err()
-	}
-
+func (s *SchedulerService) scanAlerts(ctx context.Context) {
 	s.logger.Debug("scanning alert rules...")
-
 	events, err := s.alertService.EvaluateAllRules(ctx)
 	if err != nil {
 		s.logger.Errorf("alert scan failed: %v", err)
-		return err
+		return
 	}
-
 	if len(events) > 0 {
 		s.logger.Infof("alert scan completed: triggered=%d", len(events))
 	}
-
-	return nil
 }
 
 // startLogCleanup 启动日志清理
