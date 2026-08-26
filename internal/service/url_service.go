@@ -1,82 +1,100 @@
+// Package service 提供业务逻辑层
 package service
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"logalert/internal/config"
 	"logalert/internal/model"
 	"logalert/internal/store"
-	"logalert/pkg/logger"
 	"time"
 )
 
+// URLService URL短链服务
 type URLService struct {
-	urlStore *store.URLStore
-	logger   *logger.Logger
+	cfg       *config.Config
+	urlStore  *store.URLStore
+	alertStore *store.MemoryAlertStore
 }
 
+// NewURLService 创建URL服务
 func NewURLService(cfg *config.Config, s *store.URLStore) (*URLService, error) {
-	if cfg == nil {
-		return nil, model.NewValidationError("config", "config cannot be nil")
-	}
-	if s == nil {
-		return nil, model.NewValidationError("store", "store cannot be nil")
-	}
 	return &URLService{
+		cfg:      cfg,
 		urlStore: s,
-		logger:   logger.New(),
 	}, nil
 }
 
+// SetAlertStore 设置告警存储
+func (svc *URLService) SetAlertStore(alertStore *store.MemoryAlertStore) {
+	svc.alertStore = alertStore
+}
+
+// Create 创建短链
 func (svc *URLService) Create(ctx context.Context, req *model.CreateReq) (*model.ShortURL, error) {
-	if req == nil {
-		return nil, model.NewValidationError("req", "req cannot be nil")
-	}
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
 
-	code := req.CustomCode
-	if code == "" {
-		code = model.GenerateID()[:8]
+	var code string
+	var isCustom bool
+
+	if req.CustomCode != "" {
+		code = req.CustomCode
+		isCustom = true
+	} else {
+		var err error
+		code, err = generateCode()
+		if err != nil {
+			return nil, model.NewInternalError("create", "failed to generate code")
+		}
 	}
 
-	u := &model.ShortURL{
+	shortURL := &model.ShortURL{
 		Code:      code,
 		RawURL:    req.RawURL,
 		CreatedAt: time.Now(),
 		Visits:    0,
-		Custom:    req.CustomCode != "",
+		Custom:    isCustom,
 		Disabled:  false,
 	}
 
-	if err := svc.urlStore.Save(u, false); err != nil {
-		svc.logger.Errorf("failed to save short url: %v", err)
+	if err := svc.urlStore.Save(shortURL, false); err != nil {
 		return nil, err
 	}
 
-	return u, nil
+	if svc.alertStore != nil {
+		alert := &model.AlertEvent{
+			ID:        model.GenerateID(),
+			RuleID:    "url_create",
+			RuleName:  "URL Create Monitor",
+			Source:    "url_service",
+			Level:     model.LevelInfo,
+			Count:     1,
+			Threshold: 1,
+			WindowMinutes: 1,
+			TriggeredAt: time.Now(),
+			Status:    model.AlertFired,
+			Description: "Short URL created: " + code,
+		}
+		svc.alertStore.Store(alert)
+	}
+
+	return shortURL, nil
 }
 
+// Get 获取短链
 func (svc *URLService) Get(ctx context.Context, code string) (*model.ShortURL, error) {
-	if code == "" {
-		return nil, model.NewValidationError("code", "code cannot be empty")
-	}
 	return svc.urlStore.Get(code)
 }
 
-func (svc *URLService) ListAll(ctx context.Context) ([]*model.ShortURL, error) {
-	snapshot := svc.urlStore.RawSnapshot()
-	results := make([]*model.ShortURL, 0, len(snapshot))
-	for _, u := range snapshot {
-		uCopy := u
-		results = append(results, &uCopy)
+// generateCode 生成随机短链码
+func generateCode() (string, error) {
+	b := make([]byte, 6)
+	_, err := rand.Read(b)
+	if err != nil {
+		return "", err
 	}
-	return results, nil
-}
-
-func (svc *URLService) Delete(ctx context.Context, code string) error {
-	if code == "" {
-		return model.NewValidationError("code", "code cannot be empty")
-	}
-	return svc.urlStore.Delete(code)
+	return base64.URLEncoding.EncodeToString(b)[:6], nil
 }

@@ -34,16 +34,15 @@ func (s *MemoryAlertStore) Store(event *model.AlertEvent) error {
 	}
 
 	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	s.events[event.ID] = event
-	s.mu.Unlock()
 
-	ruleIDs := s.ruleIndex[event.RuleID]
-	ruleIDs = append(ruleIDs, event.ID)
-	s.ruleIndex[event.RuleID] = ruleIDs
+	// 更新规则索引
+	s.ruleIndex[event.RuleID] = append(s.ruleIndex[event.RuleID], event.ID)
 
-	sourceIDs := s.sourceIndex[event.Source]
-	sourceIDs = append(sourceIDs, event.ID)
-	s.sourceIndex[event.Source] = sourceIDs
+	// 更新来源索引
+	s.sourceIndex[event.Source] = append(s.sourceIndex[event.Source], event.ID)
 
 	return nil
 }
@@ -122,43 +121,11 @@ func (s *MemoryAlertStore) ListActive() ([]*model.AlertEvent, error) {
 	var events []*model.AlertEvent
 	for _, event := range s.events {
 		if event.IsActive() {
-			if s.isEventIndexed(event) {
-				events = append(events, event)
-			}
+			events = append(events, event)
 		}
 	}
 	sortEventsByTime(events)
 	return events, nil
-}
-
-func (s *MemoryAlertStore) isEventIndexed(event *model.AlertEvent) bool {
-	ruleIDs, ruleOk := s.ruleIndex[event.RuleID]
-	if ruleOk {
-		found := false
-		for _, id := range ruleIDs {
-			if id == event.ID {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false
-		}
-	}
-	sourceIDs, sourceOk := s.sourceIndex[event.Source]
-	if sourceOk {
-		found := false
-		for _, id := range sourceIDs {
-			if id == event.ID {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false
-		}
-	}
-	return true
 }
 
 // Acknowledge 确认告警
