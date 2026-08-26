@@ -4,6 +4,7 @@ package response
 import (
 	"encoding/json"
 	"net/http"
+	"logalert/pkg/errors"
 	"logalert/pkg/logger"
 )
 
@@ -93,6 +94,62 @@ func ErrorCode(w http.ResponseWriter, statusCode int, code int, message string) 
 		Timestamp: nowString(),
 	}
 	writeJSON(w, statusCode, resp)
+}
+
+// ErrorWithCode 返回基于错误码的错误响应
+func ErrorWithCode(w http.ResponseWriter, httpStatus int, errCode int, detail string) {
+	msg := errors.GetMessage(errCode)
+	if detail != "" {
+		if errCode >= 40000 && errCode < 40500 {
+			msg = detail + " - " + msg
+		} else {
+			msg = msg + ": " + detail
+		}
+	}
+	resp := &Response{
+		Code:      errCode,
+		Message:   msg,
+		Timestamp: nowString(),
+	}
+	writeJSON(w, httpStatus, resp)
+}
+
+// MapError 根据错误类型返回对应的HTTP错误响应
+func MapError(w http.ResponseWriter, err error) {
+	if err == nil {
+		Success(w, nil)
+		return
+	}
+
+	if e, ok := err.(*errors.Error); ok {
+		var httpStatus int
+		switch e.Code {
+		case 40000:
+			httpStatus = http.StatusNotFound
+		case 40001:
+			httpStatus = http.StatusBadRequest
+		case 40100:
+			httpStatus = http.StatusUnauthorized
+		case 40300:
+			httpStatus = http.StatusForbidden
+		case 40400:
+			httpStatus = http.StatusBadRequest
+		case 40900:
+			httpStatus = http.StatusConflict
+		case 42900:
+			httpStatus = http.StatusTooManyRequests
+		case 50000, 50001:
+			httpStatus = http.StatusInternalServerError
+		case 50400:
+			httpStatus = http.StatusGatewayTimeout
+		default:
+			httpStatus = http.StatusInternalServerError
+		}
+		ErrorWithCode(w, httpStatus, e.Code, e.Error())
+		return
+	}
+
+	InternalError(w, err)
 }
 
 // BadRequest 返回400错误

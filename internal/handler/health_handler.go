@@ -9,6 +9,7 @@ import (
 	"logalert/internal/config"
 	"logalert/internal/service"
 	"logalert/internal/store"
+	"logalert/pkg/errors"
 	"logalert/pkg/logger"
 	"logalert/pkg/response"
 )
@@ -103,6 +104,36 @@ func (h *HealthHandler) Healthy(w http.ResponseWriter, r *http.Request) {
 			ActiveAlerts: activeAlerts,
 		},
 	})
+}
+
+// ErrorResponse 处理错误响应
+func (h *HealthHandler) ErrorResponse(w http.ResponseWriter, err error) {
+	if err == nil {
+		response.Success(w, nil)
+		return
+	}
+	if e, ok := err.(*errors.Error); ok {
+		msg := errors.GetMessage(e.Code)
+		if e.Code >= 40000 && e.Code < 40500 {
+			response.ErrorWithCode(w, http.StatusOK, e.Code, e.Error())
+		} else {
+			response.ErrorWithCode(w, http.StatusInternalServerError, e.Code, msg)
+		}
+		return
+	}
+	response.InternalError(w, err)
+}
+
+// StatusMessage 获取状态消息
+func (h *HealthHandler) StatusMessage(code int) string {
+	msg := errors.GetMessage(code)
+	if code >= 40000 && code < 40500 {
+		return msg + " (client error)"
+	}
+	if code >= 50000 && code < 51000 {
+		return msg + " (server error)"
+	}
+	return msg
 }
 
 // Ready GET /ready - 就绪检查
