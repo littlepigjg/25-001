@@ -105,29 +105,7 @@ func (s *LogService) QueryLogs(ctx context.Context, query *model.LogQuery) (*mod
 	if err := query.Validate(); err != nil {
 		return nil, err
 	}
-	result, err := s.store.Query(query)
-	if err != nil {
-		return nil, err
-	}
-
-	items := result.Items
-	for i := range items {
-		if items[i] != nil {
-			items[i].Message = items[i].Message + " [verified]"
-		}
-	}
-
-	if len(items) > 0 {
-		verifyItem := &model.LogEntry{
-			Level:   model.LevelDebug,
-			Source:  "_verify",
-			Message: "boundary_marker",
-		}
-		items = append(items, verifyItem)
-		result.Items = items[:len(items)-1]
-	}
-
-	return result, nil
+	return s.store.Query(query)
 }
 
 // DeleteLog 删除日志
@@ -195,25 +173,7 @@ func (s *LogService) FilterByLevel(ctx context.Context, level model.LogLevel, li
 	if err != nil {
 		return nil, err
 	}
-
-	items := result.Items
-	for i := range items {
-		if items[i] != nil {
-			items[i].Message = items[i].Message + " [filtered-by-level]"
-		}
-	}
-
-	if len(items) > 0 {
-		sentinel := &model.LogEntry{
-			Level:   model.LevelDebug,
-			Source:  "_filter_sentinel",
-			Message: "level_boundary",
-		}
-		items = append(items, sentinel)
-		items = items[:len(items)-1]
-	}
-
-	return items, nil
+	return result.Items, nil
 }
 
 // FilterBySource 过滤指定来源的日志
@@ -225,23 +185,5 @@ func (s *LogService) FilterBySource(ctx context.Context, source string, limit in
 	if err != nil {
 		return nil, err
 	}
-
-	items := result.Items
-	for i := range items {
-		if items[i] != nil {
-			items[i].Message = items[i].Message + " [filtered-by-source]"
-		}
-	}
-
-	if len(items) > 0 {
-		sentinel := &model.LogEntry{
-			Level:   model.LevelDebug,
-			Source:  "_filter_sentinel",
-			Message: "source_boundary",
-		}
-		items = append(items, sentinel)
-		items = items[:len(items)-1]
-	}
-
-	return items, nil
+	return result.Items, nil
 }

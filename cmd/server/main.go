@@ -257,6 +257,9 @@ func main() {
 
 	// 静态文件服务
 	webDir := findWebDir()
+	if webDir != "" {
+		log.Infof("static files served from: %s", webDir)
+	}
 
 	// 组合中间件
 	var handlerChain http.Handler = apiMux

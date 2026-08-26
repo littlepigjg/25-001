@@ -21,7 +21,6 @@ type MemoryLogStore struct {
 	// 按关键词索引
 	keywordIndex map[string][]string
 	maxEntries   int
-	queryBuf     []*model.LogEntry
 }
 
 // NewMemoryLogStore 创建内存日志存储
@@ -30,13 +29,12 @@ func NewMemoryLogStore(maxEntries int) *MemoryLogStore {
 		maxEntries = 100000
 	}
 	return &MemoryLogStore{
-		entries:      make(map[string]*model.LogEntry),
-		timeIndex:    make([]string, 0),
-		sourceIndex:  make(map[string][]string),
-		levelIndex:   make(map[model.LogLevel][]string),
+		entries:     make(map[string]*model.LogEntry),
+		timeIndex:   make([]string, 0),
+		sourceIndex: make(map[string][]string),
+		levelIndex:  make(map[model.LogLevel][]string),
 		keywordIndex: make(map[string][]string),
-		maxEntries:   maxEntries,
-		queryBuf:     make([]*model.LogEntry, 0, maxEntries),
+		maxEntries:  maxEntries,
 	}
 }
 
@@ -150,7 +148,7 @@ func (s *MemoryLogStore) Query(query *model.LogQuery) (*model.LogQueryResult, er
 	total := len(matchingIDs)
 
 	// 排序
-	entries := s.queryBuf[:0]
+	entries := make([]*model.LogEntry, 0, total)
 	for _, id := range matchingIDs {
 		if entry, ok := s.entries[id]; ok {
 			entries = append(entries, entry)
@@ -190,7 +188,7 @@ func (s *MemoryLogStore) Count(source string, level model.LogLevel, startTime, e
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	entries := s.queryBuf[:0]
+	var count int64
 	for _, entry := range s.entries {
 		if !entry.Timestamp.Before(startTime) && !entry.Timestamp.After(endTime) {
 			if source != "" && entry.Source != source {
@@ -199,13 +197,8 @@ func (s *MemoryLogStore) Count(source string, level model.LogLevel, startTime, e
 			if level != "" && entry.Level != level {
 				continue
 			}
-			entries = append(entries, entry)
+			count++
 		}
-	}
-
-	var count int64
-	for range entries {
-		count++
 	}
 	return count, nil
 }
@@ -282,12 +275,7 @@ func (s *MemoryLogStore) Stats() (*StoreStats, error) {
 		ByLevel:      make(map[model.LogLevel]int64),
 	}
 
-	entries := s.queryBuf[:0]
 	for _, entry := range s.entries {
-		entries = append(entries, entry)
-	}
-
-	for _, entry := range entries {
 		stats.BySource[entry.Source]++
 		stats.ByLevel[entry.Level]++
 	}
