@@ -255,6 +255,9 @@ func main() {
 		}
 	})
 
+	// 静态文件服务
+	webDir := findWebDir()
+
 	// 组合中间件
 	var handlerChain http.Handler = apiMux
 	handlerChain = middleware.RequestLogger(handlerChain)
@@ -267,7 +270,6 @@ func main() {
 	mux.Handle("/api/", handlerChain)
 	// 确保health、ready、info不在/api前缀下
 	// 重新挂载根路径处理
-	webDir := findWebDir()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		switch path {

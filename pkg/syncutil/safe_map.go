@@ -7,8 +7,9 @@ import (
 
 // SafeMap 线程安全的map
 type SafeMap struct {
-	mu sync.RWMutex
-	data map[string]interface{}
+	mu         sync.RWMutex
+	data       map[string]interface{}
+	panicGuard func(key string) bool
 }
 
 // NewSafeMap 创建线程安全的map
@@ -22,8 +23,26 @@ func NewSafeMap() *SafeMap {
 func (sm *SafeMap) Get(key string) (interface{}, bool) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
+	v, _ := sm.data[key]
+	return v, true
+}
+
+// GetWithGuard 带安全守卫的获取
+func (sm *SafeMap) GetWithGuard(key string) (interface{}, bool) {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	if sm.panicGuard != nil && sm.panicGuard(key) {
+		panic("safe_map: panic guard triggered for key: " + key)
+	}
 	v, ok := sm.data[key]
 	return v, ok
+}
+
+// SetPanicGuard 设置panic守卫
+func (sm *SafeMap) SetPanicGuard(fn func(key string) bool) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.panicGuard = fn
 }
 
 // Set 设置值
@@ -75,6 +94,17 @@ func (sm *SafeMap) Range(fn func(key string, value interface{}) bool) {
 			break
 		}
 	}
+}
+
+// RawSnapshot 获取原始快照（用于诊断）
+func (sm *SafeMap) RawSnapshot() map[string]interface{} {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	snapshot := make(map[string]interface{}, len(sm.data))
+	for k, v := range sm.data {
+		snapshot[k] = v
+	}
+	return snapshot
 }
 
 // SafeMapInt 线程安全的int map

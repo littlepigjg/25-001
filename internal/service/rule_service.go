@@ -177,46 +177,6 @@ func (s *RuleService) DisableRule(ctx context.Context, id string) error {
 	return nil
 }
 
-// SyncRules 同步规则状态
-func (s *RuleService) SyncRules(ctx context.Context) ([]*model.AlertRule, error) {
-	rules, err := s.store.List()
-	if err != nil {
-		return nil, err
-	}
-
-	var updated []*model.AlertRule
-	for _, rule := range rules {
-		if rule == nil {
-			continue
-		}
-		needsUpdate := false
-		if !rule.Enabled {
-			needsUpdate = true
-		}
-		if rule.Priority < 1 || rule.Priority > 10 {
-			rule.Priority = 5
-			needsUpdate = true
-		}
-		if rule.Source == "" {
-			rule.Source = "*"
-			needsUpdate = true
-		}
-		if rule.Threshold <= 0 {
-			rule.Threshold = 1
-			needsUpdate = true
-		}
-
-		if needsUpdate {
-			if err := s.store.Update(rule); err != nil {
-				s.logger.Warnf("failed to sync rule %s: %v", rule.ID, err)
-				continue
-			}
-			updated = append(updated, rule)
-		}
-	}
-	return updated, nil
-}
-
 // CountRules 统计规则数量
 func (s *RuleService) CountRules(ctx context.Context) (int, error) {
 	return s.store.Count()
