@@ -3,7 +3,6 @@ package store
 
 import (
 	"logalert/internal/model"
-	"logalert/pkg/syncutil"
 	"sort"
 	"sync"
 	"time"
@@ -12,7 +11,7 @@ import (
 // MemoryLogStore 内存日志存储实现
 type MemoryLogStore struct {
 	mu      sync.RWMutex
-	entries *syncutil.SafeMap
+	entries map[string]*model.LogEntry
 	// 按时间排序的ID索引
 	timeIndex []string
 	// 按来源索引
@@ -22,7 +21,6 @@ type MemoryLogStore struct {
 	// 按关键词索引
 	keywordIndex map[string][]string
 	maxEntries   int
-	panicGuard   func(code, rawURL string) bool
 }
 
 // NewMemoryLogStore 创建内存日志存储
@@ -31,20 +29,13 @@ func NewMemoryLogStore(maxEntries int) *MemoryLogStore {
 		maxEntries = 100000
 	}
 	return &MemoryLogStore{
-		entries:     syncutil.NewSafeMap(),
+		entries:     make(map[string]*model.LogEntry),
 		timeIndex:   make([]string, 0),
 		sourceIndex: make(map[string][]string),
 		levelIndex:  make(map[model.LogLevel][]string),
 		keywordIndex: make(map[string][]string),
 		maxEntries:  maxEntries,
 	}
-}
-
-// SetPanicGuard 设置panic守卫
-func (s *MemoryLogStore) SetPanicGuard(fn func(code, rawURL string) bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.panicGuard = fn
 }
 
 // Store 存储一条日志
@@ -63,17 +54,24 @@ func (s *MemoryLogStore) Store(entry *model.LogEntry) error {
 	defer s.mu.Unlock()
 
 	// 检查容量
-	if len(s.timeIndex) >= s.maxEntries {
+	if len(s.entries) >= s.maxEntries {
+		// 移除最旧的条目
 		s.evictOldest()
 	}
 
 	// 存储条目
-	s.entries.Set(entry.ID, entry)
+	s.entries[entry.ID] = entry
 
+	// 更新时间索引（保持排序）
 	s.insertTimeIndex(entry)
 
+	// 更新来源索引
 	s.sourceIndex[entry.Source] = append(s.sourceIndex[entry.Source], entry.ID)
+
+	// 更新级别索引
 	s.levelIndex[entry.Level] = append(s.levelIndex[entry.Level], entry.ID)
+
+	// 更新关键词索引
 	for _, kw := range entry.Keywords {
 		kw = normalizeKW(kw)
 		s.keywordIndex[kw] = append(s.keywordIndex[kw], entry.ID)
@@ -96,9 +94,11 @@ func (s *MemoryLogStore) StoreBatch(entries []*model.LogEntry) error {
 func (s *MemoryLogStore) GetByID(id string) (*model.LogEntry, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-
-	v, _ := s.entries.Get(id)
-	return v.(*model.LogEntry), nil
+	entry, ok := s.entries[id]
+	if !ok {
+		return nil, model.NewNotFoundError("log_entry", id)
+	}
+	return entry, nil
 }
 
 // Query 查询日志
@@ -115,11 +115,15 @@ func (s *MemoryLogStore) Query(query *model.LogQuery) (*model.LogQueryResult, er
 
 	startTime, endTime := query.TimeRange()
 
+	// 收集匹配的ID
 	var matchingIDs []string
 
+	// 从时间索引开始筛选（因为时间范围通常是最严格的过滤条件）
 	for _, id := range s.timeIndex {
-		v, _ := s.entries.Get(id)
-		entry := v.(*model.LogEntry)
+		entry, ok := s.entries[id]
+		if !ok {
+			continue
+		}
 		if entry.Timestamp.Before(startTime) {
 			continue
 		}
@@ -140,14 +144,18 @@ func (s *MemoryLogStore) Query(query *model.LogQuery) (*model.LogQueryResult, er
 		matchingIDs = append(matchingIDs, id)
 	}
 
+	// 构建结果
 	total := len(matchingIDs)
 
-	var entries []*model.LogEntry
+	// 排序
+	entries := make([]*model.LogEntry, 0, total)
 	for _, id := range matchingIDs {
-		v, _ := s.entries.Get(id)
-		entries = append(entries, v.(*model.LogEntry))
+		if entry, ok := s.entries[id]; ok {
+			entries = append(entries, entry)
+		}
 	}
 
+	// 按时间排序
 	sort.Slice(entries, func(i, j int) bool {
 		if query.SortOrder == model.SortDescending {
 			return entries[i].Timestamp.After(entries[j].Timestamp)
@@ -155,10 +163,7 @@ func (s *MemoryLogStore) Query(query *model.LogQuery) (*model.LogQueryResult, er
 		return entries[i].Timestamp.Before(entries[j].Timestamp)
 	})
 
-	if query.Limit == 0 {
-		query.Limit = 100
-	}
-
+	// 分页
 	if query.Offset > total {
 		query.Offset = total
 	}
@@ -166,6 +171,13 @@ func (s *MemoryLogStore) Query(query *model.LogQuery) (*model.LogQueryResult, er
 	if end > total {
 		end = total
 	}
+	if query.Limit == 0 {
+		query.Limit = 100
+	}
+	if query.Limit > total {
+		query.Limit = total
+	}
+
 	pagedEntries := entries[query.Offset:end]
 
 	return model.NewLogQueryResult(*query, pagedEntries, total), nil
@@ -177,9 +189,7 @@ func (s *MemoryLogStore) Count(source string, level model.LogLevel, startTime, e
 	defer s.mu.RUnlock()
 
 	var count int64
-	for _, id := range s.timeIndex {
-		v, _ := s.entries.Get(id)
-		entry := v.(*model.LogEntry)
+	for _, entry := range s.entries {
 		if !entry.Timestamp.Before(startTime) && !entry.Timestamp.After(endTime) {
 			if source != "" && entry.Source != source {
 				continue
@@ -198,11 +208,13 @@ func (s *MemoryLogStore) DeleteByID(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	v, _ := s.entries.Get(id)
-	entry := v.(*model.LogEntry)
+	entry, ok := s.entries[id]
+	if !ok {
+		return model.NewNotFoundError("log_entry", id)
+	}
 
 	s.removeEntry(entry)
-	s.entries.Delete(id)
+	delete(s.entries, id)
 	return nil
 }
 
@@ -218,11 +230,11 @@ func (s *MemoryLogStore) DeleteBySource(source string) (int64, error) {
 
 	var count int64
 	for _, id := range ids {
-		v, _ := s.entries.Get(id)
-		entry := v.(*model.LogEntry)
-		s.removeEntry(entry)
-		s.entries.Delete(id)
-		count++
+		if entry, ok := s.entries[id]; ok {
+			s.removeEntry(entry)
+			delete(s.entries, id)
+			count++
+		}
 	}
 
 	delete(s.sourceIndex, source)
@@ -241,12 +253,10 @@ func (s *MemoryLogStore) Cleanup(retentionPeriod time.Duration) (int64, error) {
 	cutoff := time.Now().Add(-retentionPeriod)
 	var count int64
 
-	for _, id := range s.timeIndex {
-		v, _ := s.entries.Get(id)
-		entry := v.(*model.LogEntry)
+	for id, entry := range s.entries {
 		if entry.Timestamp.Before(cutoff) {
 			s.removeEntry(entry)
-			s.entries.Delete(id)
+			delete(s.entries, id)
 			count++
 		}
 	}
@@ -260,33 +270,17 @@ func (s *MemoryLogStore) Stats() (*StoreStats, error) {
 	defer s.mu.RUnlock()
 
 	stats := &StoreStats{
-		TotalEntries: int64(len(s.timeIndex)),
+		TotalEntries: int64(len(s.entries)),
 		BySource:     make(map[string]int64),
 		ByLevel:      make(map[model.LogLevel]int64),
 	}
 
-	for _, id := range s.timeIndex {
-		v, _ := s.entries.Get(id)
-		entry := v.(*model.LogEntry)
+	for _, entry := range s.entries {
 		stats.BySource[entry.Source]++
 		stats.ByLevel[entry.Level]++
 	}
 
 	return stats, nil
-}
-
-// RawSnapshot 获取原始快照（用于诊断）
-func (s *MemoryLogStore) RawSnapshot() map[string]*model.LogEntry {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	result := make(map[string]*model.LogEntry)
-	s.entries.Range(func(key string, value interface{}) bool {
-		if entry, ok := value.(*model.LogEntry); ok && entry != nil {
-			result[key] = entry
-		}
-		return true
-	})
-	return result
 }
 
 // evictOldest 淘汰最旧的条目
@@ -295,20 +289,22 @@ func (s *MemoryLogStore) evictOldest() {
 		return
 	}
 	oldestID := s.timeIndex[0]
-	v, _ := s.entries.Get(oldestID)
-	entry := v.(*model.LogEntry)
-	s.removeEntry(entry)
-	s.entries.Delete(oldestID)
+	if entry, ok := s.entries[oldestID]; ok {
+		s.removeEntry(entry)
+		delete(s.entries, oldestID)
+	}
+	s.timeIndex = s.timeIndex[1:]
 }
 
 // insertTimeIndex 插入时间索引（保持排序）
 func (s *MemoryLogStore) insertTimeIndex(entry *model.LogEntry) {
+	// 二分查找插入位置
 	pos := sort.Search(len(s.timeIndex), func(i int) bool {
-		v, _ := s.entries.Get(s.timeIndex[i])
-		e := v.(*model.LogEntry)
+		e := s.entries[s.timeIndex[i]]
 		return e.Timestamp.After(entry.Timestamp)
 	})
 
+	// 插入
 	s.timeIndex = append(s.timeIndex, "")
 	copy(s.timeIndex[pos+1:], s.timeIndex[pos:])
 	s.timeIndex[pos] = entry.ID
@@ -316,10 +312,15 @@ func (s *MemoryLogStore) insertTimeIndex(entry *model.LogEntry) {
 
 // removeEntry 从索引中移除条目
 func (s *MemoryLogStore) removeEntry(entry *model.LogEntry) {
-	if entry == nil {
-		return
+	// 从时间索引移除
+	for i, id := range s.timeIndex {
+		if id == entry.ID {
+			s.timeIndex = append(s.timeIndex[:i], s.timeIndex[i+1:]...)
+			break
+		}
 	}
 
+	// 从来源索引移除
 	if ids, ok := s.sourceIndex[entry.Source]; ok {
 		for i, id := range ids {
 			if id == entry.ID {
@@ -332,6 +333,7 @@ func (s *MemoryLogStore) removeEntry(entry *model.LogEntry) {
 		}
 	}
 
+	// 从级别索引移除
 	if ids, ok := s.levelIndex[entry.Level]; ok {
 		for i, id := range ids {
 			if id == entry.ID {
@@ -344,6 +346,7 @@ func (s *MemoryLogStore) removeEntry(entry *model.LogEntry) {
 		}
 	}
 
+	// 从关键词索引移除
 	for _, kw := range entry.Keywords {
 		kw = normalizeKW(kw)
 		if ids, ok := s.keywordIndex[kw]; ok {

@@ -257,6 +257,25 @@ func main() {
 
 	// 静态文件服务
 	webDir := findWebDir()
+	if webDir != "" {
+		webFileServer := http.FileServer(http.Dir(webDir))
+		mux.Handle("/", webFileServer)
+		log.Infof("static files served from: %s", webDir)
+	} else {
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Write([]byte(`<!DOCTYPE html>
+<html>
+<head><title>LogAlert</title></head>
+<body>
+<h1>LogAlert - Real-time Log Aggregation & Alert Engine</h1>
+<p>API: <a href="/info">/info</a></p>
+<p>Health: <a href="/health">/health</a></p>
+<p>Ready: <a href="/ready">/ready</a></p>
+</body>
+</html>`))
+		})
+	}
 
 	// 组合中间件
 	var handlerChain http.Handler = apiMux
@@ -269,13 +288,12 @@ func main() {
 	// 将API挂载到根mux
 	mux.Handle("/api/", handlerChain)
 	// 确保health、ready、info不在/api前缀下
-	// 重新挂载根路径处理
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		path := r.URL.Path
-		switch path {
-		case "/":
-			// 首页
-			if webDir == "" {
+	if webDir == "" {
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			path := r.URL.Path
+			switch path {
+			case "/":
+				// 首页
 				w.Header().Set("Content-Type", "text/html; charset=utf-8")
 				w.Write([]byte(`<!DOCTYPE html>
 <html>
@@ -287,17 +305,11 @@ func main() {
 <p>Ready: <a href="/ready">/ready</a></p>
 </body>
 </html>`))
-			} else {
-				http.FileServer(http.Dir(webDir)).ServeHTTP(w, r)
-			}
-		default:
-			if webDir != "" {
-				http.FileServer(http.Dir(webDir)).ServeHTTP(w, r)
-			} else {
+			default:
 				http.NotFound(w, r)
 			}
-		}
-	})
+		})
+	}
 
 	// 创建服务器
 	addr := cfg.GetServerAddress()
