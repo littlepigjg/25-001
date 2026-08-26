@@ -1,0 +1,27 @@
+# Docker Ignore File
+.git
+.gitignore
+*.md
+BUG_CATALOG.md
+BENZHI_README.md
+build_benzhi_docker.sh
+.DS_Store
+*.log
+coverage.txt
+.env
+.env.local
+tmp/
+temp/
+cache/
+node_modules/
+.vscode/
+.idea/
+*.swp
+*.swo
+config.json
+red_green_test.go
+验收.txt
+提示词2_缺陷注入.txt
+提示词3_Docker缺陷验证.txt
+branch.sh
+commit.sh
