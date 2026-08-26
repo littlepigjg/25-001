@@ -19,7 +19,3 @@ node_modules/
 *.swp
 *.swo
 config.json
-red_green_test.go
-验收.txt
-提示词2_缺陷注入.txt
-提示词3_Docker缺陷验证.txt
