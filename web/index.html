@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LogAlert - 实时日志聚合与告警规则引擎</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: #f5f7fa;
+            color: #2c3e50;
+            line-height: 1.6;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px 20px;
+            text-align: center;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+        header h1 {
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
+        header p {
+            opacity: 0.9;
+        }
+        .nav {
+            background: white;
+            border-radius: 8px;
+            padding: 15px 20px;
+            margin-bottom: 20px;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        }
+        .nav button {
+            padding: 8px 16px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            background: #f8f9fa;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 0.9em;
+        }
+        .nav button:hover {
+            background: #667eea;
+            color: white;
+            border-color: #667eea;
+        }
+        .nav button.active {
+            background: #667eea;
+            color: white;
+            border-color: #667eea;
+        }
+        .panel {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        }
+        .panel h2 {
+            margin-bottom: 15px;
+            color: #333;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            color: #555;
+            font-weight: 500;
+        }
+        .form-group input,
+        .form-group select,
+        .form-group textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 1em;
+        }
+        .form-group textarea {
+            min-height: 100px;
+            resize: vertical;
+        }
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            background: #667eea;
+            color: white;
+            font-size: 1em;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn:hover {
+            background: #5568d3;
+        }
+        .btn-danger {
+            background: #e74c3c;
+        }
+        .btn-danger:hover {
+            background: #c0392b;
+        }
+        .btn-secondary {
+            background: #95a5a6;
+        }
+        .btn-secondary:hover {
+            background: #7f8c8d;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #eee;
+        }
+        th {
+            background: #f8f9fa;
+            font-weight: 600;
+            color: #555;
+        }
+        tr:hover {
+            background: #f8f9fa;
+        }
+        .level-info { color: #3498db; }
+        .level-warn { color: #f39c12; }
+        .level-error { color: #e74c3c; font-weight: bold; }
+        .level-debug { color: #95a5a6; }
+        .level-fatal { color: #8e44ad; font-weight: bold; }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+            text-align: center;
+        }
+        .stat-card .number {
+            font-size: 2em;
+            font-weight: bold;
+            color: #667eea;
+        }
+        .stat-card .label {
+            color: #888;
+            margin-top: 5px;
+        }
+        .hidden {
+            display: none;
+        }
+        .alert-fired { color: #e74c3c; }
+        .alert-resolved { color: #2ecc71; }
+        .alert-acknowledged { color: #f39c12; }
+        .status-ok {
+            color: #2ecc71;
+            font-weight: bold;
+        }
+        .status-error {
+            color: #e74c3c;
+            font-weight: bold;
+        }
+        .chart-placeholder {
+            background: #f8f9fa;
+            border: 2px dashed #ddd;
+            border-radius: 8px;
+            padding: 30px;
+            text-align: center;
+            color: #888;
+            min-height: 150px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .bar-chart {
+            display: flex;
+            align-items: flex-end;
+            gap: 5px;
+            height: 150px;
+            padding: 10px 0;
+        }
+        .bar {
+            flex: 1;
+            background: linear-gradient(180deg, #667eea 0%, #764ba2 100%);
+            border-radius: 4px 4px 0 0;
+            position: relative;
+            min-width: 5px;
+        }
+        .bar .label {
+            position: absolute;
+            bottom: -20px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 0.7em;
+            color: #888;
+        }
+        .bar .value {
+            position: absolute;
+            top: -18px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 0.7em;
+            color: #333;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📊 LogAlert</h1>
+            <p>实时日志聚合与告警规则引擎 - 监控服务日志，实时告警</p>
+            <div id="healthStatus" style="margin-top:10px;"></div>
+        </header>
+
+        <div class="nav">
+            <button onclick="showPanel('log')" class="active">📝 日志</button>
+            <button onclick="showPanel('rule')">⚙️ 规则</button>
+            <button onclick="showPanel('alert')">🔔 告警</button>
+            <button onclick="showPanel('stats')">📈 统计</button>
+        </div>
+
+        <!-- 日志面板 -->
+        <div id="log-panel" class="panel">
+            <h2>日志管理</h2>
+            <div style="display:grid; grid-template-columns:1fr 2fr; gap:20px;">
+                <div>
+                    <h3 style="margin-bottom:10px;">创建日志</h3>
+                    <div class="form-group">
+                        <label>级别</label>
+                        <select id="log-level">
+                            <option value="INFO">INFO</option>
+                            <option value="WARN">WARN</option>
+                            <option value="ERROR">ERROR</option>
+                            <option value="DEBUG">DEBUG</option>
+                            <option value="FATAL">FATAL</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>来源</label>
+                        <input type="text" id="log-source" placeholder="如：order-service">
+                    </div>
+                    <div class="form-group">
+                        <label>消息</label>
+                        <textarea id="log-message" placeholder="日志消息内容"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>关键词（逗号分隔）</label>
+                        <input type="text" id="log-keywords" placeholder="关键词1,关键词2">
+                    </div>
+                    <button class="btn" onclick="createLog()">提交日志</button>
+                </div>
+                <div>
+                    <h3 style="margin-bottom:10px;">日志查询</h3>
+                    <div class="form-group" style="display:flex; gap:10px; flex-wrap:wrap;">
+                        <select id="query-level">
+                            <option value="">全部级别</option>
+                            <option value="INFO">INFO</option>
+                            <option value="WARN">WARN</option>
+                            <option value="ERROR">ERROR</option>
+                        </select>
+                        <input type="text" id="query-source" placeholder="来源过滤">
+                        <input type="text" id="query-keyword" placeholder="关键词搜索">
+                        <button class="btn" onclick="queryLogs()">查询</button>
+                    </div>
+                    <div id="log-list"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 规则面板 -->
+        <div id="rule-panel" class="panel hidden">
+            <h2>告警规则</h2>
+            <div style="display:grid; grid-template-columns:1fr 2fr; gap:20px;">
+                <div>
+                    <h3 style="margin-bottom:10px;">创建规则</h3>
+                    <div class="form-group">
+                        <label>规则名称</label>
+                        <input type="text" id="rule-name" placeholder="如：订单服务错误监控">
+                    </div>
+                    <div class="form-group">
+                        <label>描述</label>
+                        <input type="text" id="rule-desc" placeholder="规则描述">
+                    </div>
+                    <div class="form-group">
+                        <label>监控来源（空=所有）</label>
+                        <input type="text" id="rule-source" placeholder="留空监控所有来源">
+                    </div>
+                    <div class="form-group">
+                        <label>级别</label>
+                        <select id="rule-level">
+                            <option value="ERROR">ERROR</option>
+                            <option value="WARN">WARN</option>
+                            <option value="FATAL">FATAL</option>
+                            <option value="INFO">INFO</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>时间窗口（分钟）</label>
+                        <input type="number" id="rule-window" value="5" min="1" max="1440">
+                    </div>
+                    <div class="form-group">
+                        <label>阈值</label>
+                        <input type="number" id="rule-threshold" value="10" min="1">
+                    </div>
+                    <button class="btn" onclick="createRule()">创建规则</button>
+                </div>
+                <div>
+                    <h3 style="margin-bottom:10px;">规则列表</h3>
+                    <div id="rule-list"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 告警面板 -->
+        <div id="alert-panel" class="panel hidden">
+            <h2>告警事件</h2>
+            <div style="display:flex; gap:10px; margin-bottom:15px;">
+                <button class="btn" onclick="listAlerts(false)">全部告警</button>
+                <button class="btn" onclick="listAlerts(true)">仅活跃告警</button>
+                <button class="btn btn-secondary" onclick="clearAlerts()">刷新</button>
+            </div>
+            <div id="alert-list"></div>
+        </div>
+
+        <!-- 统计面板 -->
+        <div id="stats-panel" class="panel hidden">
+            <h2>统计分析</h2>
+            <div class="stats-grid" style="margin-bottom:20px;">
+                <div class="stat-card">
+                    <div class="number" id="stat-total">0</div>
+                    <div class="label">日志总数</div>
+                </div>
+                <div class="stat-card">
+                    <div class="number" id="stat-sources">0</div>
+                    <div class="label">来源数量</div>
+                </div>
+                <div class="stat-card">
+                    <div class="number" id="stat-errors">0</div>
+                    <div class="label">错误数量</div>
+                </div>
+                <div class="stat-card">
+                    <div class="number" id="stat-error-rate">0%</div>
+                    <div class="label">错误率</div>
+                </div>
+            </div>
+            <h3 style="margin-bottom:10px;">每小时趋势（最近24小时）</h3>
+            <div id="hourly-chart" class="bar-chart"></div>
+            <h3 style="margin:20px 0 10px;">来源统计</h3>
+            <div id="source-stats"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '';
+
+        function showPanel(name) {
+            document.querySelectorAll('.nav button').forEach(b => b.classList.remove('active'));
+            document.getElementById(name + '-panel').classList.remove('hidden');
+            document.querySelectorAll('.panel').forEach(p => {
+                if (p.id !== name + '-panel') p.classList.add('hidden');
+            });
+            event.target.classList.add('active');
+            if (name === 'stats') loadStats();
+            if (name === 'alert') listAlerts(false);
+            if (name === 'rule') listRules();
+            if (name === 'log') queryLogs();
+        }
+
+        async function apiCall(method, path, data = null) {
+            const opts = {
+                method: method,
+                headers: { 'Content-Type': 'application/json' }
+            };
+            if (data) opts.body = JSON.stringify(data);
+            const res = await fetch(API_BASE + path, opts);
+            return res.json();
+        }
+
+        async function createLog() {
+            const data = {
+                level: document.getElementById('log-level').value,
+                source: document.getElementById('log-source').value,
+                message: document.getElementById('log-message').value,
+                keywords: document.getElementById('log-keywords').value.split(',').map(k => k.trim()).filter(Boolean)
+            };
+            try {
+                const result = await apiCall('POST', '/api/logs', data);
+                if (result.code === 0) {
+                    alert('日志创建成功！');
+                    document.getElementById('log-message').value = '';
+                    queryLogs();
+                } else {
+                    alert('创建失败：' + result.message);
+                }
+            } catch (e) {
+                alert('请求失败：' + e.message);
+            }
+        }
+
+        async function queryLogs() {
+            const params = new URLSearchParams();
+            const level = document.getElementById('query-level').value;
+            const source = document.getElementById('query-source').value;
+            const keyword = document.getElementById('query-keyword').value;
+            if (level) params.set('level', level);
+            if (source) params.set('source', source);
+            if (keyword) params.set('keyword', keyword);
+            params.set('limit', '50');
+            try {
+                const result = await apiCall('GET', '/api/logs?' + params.toString());
+                displayLogs(result.data.items || []);
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        function displayLogs(logs) {
+            const container = document.getElementById('log-list');
+            if (!logs.length) {
+                container.innerHTML = '<p style="color:#888;">暂无日志</p>';
+                return;
+            }
+            let html = '<table><thead><tr><th>级别</th><th>来源</th><th>消息</th><th>时间</th><th>操作</th></tr></thead><tbody>';
+            logs.forEach(log => {
+                const levelClass = 'level-' + log.level.toLowerCase();
+                html += `<tr>
+                    <td class="${levelClass}">${log.level}</td>
+                    <td>${log.source}</td>
+                    <td>${log.message.substring(0, 50)}</td>
+                    <td>${new Date(log.timestamp).toLocaleString('zh-CN')}</td>
+                    <td><button class="btn btn-danger" onclick="deleteLog('${log.id}')">删除</button></td>
+                </tr>`;
+            });
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        }
+
+        async function deleteLog(id) {
+            if (!confirm('确认删除该日志？')) return;
+            try {
+                await apiCall('DELETE', '/api/logs/' + id);
+                queryLogs();
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        async function createRule() {
+            const data = {
+                name: document.getElementById('rule-name').value,
+                description: document.getElementById('rule-desc').value,
+                source: document.getElementById('rule-source').value,
+                level: document.getElementById('rule-level').value,
+                window_minutes: parseInt(document.getElementById('rule-window').value),
+                threshold: parseInt(document.getElementById('rule-threshold').value)
+            };
+            try {
+                const result = await apiCall('POST', '/api/rules', data);
+                if (result.code === 0) {
+                    alert('规则创建成功！');
+                    listRules();
+                } else {
+                    alert('创建失败：' + result.message);
+                }
+            } catch (e) {
+                alert('请求失败：' + e.message);
+            }
+        }
+
+        async function listRules() {
+            try {
+                const result = await apiCall('GET', '/api/rules');
+                displayRules(result.data.items || []);
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        function displayRules(rules) {
+            const container = document.getElementById('rule-list');
+            if (!rules.length) {
+                container.innerHTML = '<p style="color:#888;">暂无规则</p>';
+                return;
+            }
+            let html = '<table><thead><tr><th>名称</th><th>来源</th><th>级别</th><th>窗口</th><th>阈值</th><th>状态</th><th>操作</th></tr></thead><tbody>';
+            rules.forEach(rule => {
+                html += `<tr>
+                    <td>${rule.name}</td>
+                    <td>${rule.source || '*'}</td>
+                    <td class="level-${rule.level.toLowerCase()}">${rule.level}</td>
+                    <td>${rule.window_minutes}分钟</td>
+                    <td>${rule.threshold}</td>
+                    <td>${rule.enabled ? '✅ 启用' : '❌ 禁用'}</td>
+                    <td>
+                        <button class="btn" onclick="toggleRule('${rule.id}', ${!rule.enabled})">${rule.enabled ? '禁用' : '启用'}</button>
+                        <button class="btn btn-danger" onclick="deleteRule('${rule.id}')">删除</button>
+                    </td>
+                </tr>`;
+            });
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        }
+
+        async function toggleRule(id, enable) {
+            const url = enable ? '/api/rules/' + id + '/enable' : '/api/rules/' + id + '/disable';
+            try {
+                await apiCall('POST', url);
+                listRules();
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        async function deleteRule(id) {
+            if (!confirm('确认删除该规则？')) return;
+            try {
+                await apiCall('DELETE', '/api/rules/' + id);
+                listRules();
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        async function listAlerts(activeOnly) {
+            const params = activeOnly ? '?active=true' : '';
+            try {
+                const result = await apiCall('GET', '/api/alerts' + params);
+                displayAlerts(result.data.items || []);
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        function displayAlerts(alerts) {
+            const container = document.getElementById('alert-list');
+            if (!alerts.length) {
+                container.innerHTML = '<p style="color:#888;">暂无告警</p>';
+                return;
+            }
+            let html = '<table><thead><tr><th>规则</th><th>来源</th><th>级别</th><th>触发数</th><th>状态</th><th>触发时间</th><th>操作</th></tr></thead><tbody>';
+            alerts.forEach(alert => {
+                let statusClass = '';
+                let statusText = alert.status;
+                if (alert.status === 'FIRED') { statusClass = 'alert-fired'; statusText = '🔴 已触发'; }
+                else if (alert.status === 'ACKNOWLEDGED') { statusClass = 'alert-acknowledged'; statusText = '🟡 已确认'; }
+                else if (alert.status === 'RESOLVED') { statusClass = 'alert-resolved'; statusText = '🟢 已解决'; }
+                
+                const actions = alert.status !== 'RESOLVED' ? 
+                    `<button class="btn" onclick="acknowledgeAlert('${alert.id}')">确认</button>
+                     <button class="btn" onclick="resolveAlert('${alert.id}')">解决</button>` : '';
+                
+                html += `<tr>
+                    <td>${alert.rule_name}</td>
+                    <td>${alert.source}</td>
+                    <td class="level-${alert.level.toLowerCase()}">${alert.level}</td>
+                    <td>${alert.count}/${alert.threshold}</td>
+                    <td class="${statusClass}">${statusText}</td>
+                    <td>${new Date(alert.triggered_at).toLocaleString('zh-CN')}</td>
+                    <td>${actions}</td>
+                </tr>`;
+            });
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        }
+
+        async function acknowledgeAlert(id) {
+            try {
+                await apiCall('POST', '/api/alerts/' + id + '/acknowledge');
+                listAlerts(false);
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        async function resolveAlert(id) {
+            try {
+                await apiCall('POST', '/api/alerts/' + id + '/resolve');
+                listAlerts(false);
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        async function clearAlerts() {
+            listAlerts(false);
+        }
+
+        async function loadStats() {
+            try {
+                const statsResult = await apiCall('GET', '/api/stats');
+                const hourlyResult = await apiCall('GET', '/api/stats/hourly?hours=24');
+                const sourceResult = await apiCall('GET', '/api/stats/sources?limit=10');
+                
+                const stats = statsResult.data;
+                document.getElementById('stat-total').textContent = stats ? stats.total_count : 0;
+                document.getElementById('stat-sources').textContent = stats && stats.by_source ? Object.keys(stats.by_source).length : 0;
+                
+                if (stats && stats.by_level) {
+                    const errors = (stats.by_level['ERROR'] || 0) + (stats.by_level['FATAL'] || 0);
+                    document.getElementById('stat-errors').textContent = errors;
+                    const rate = stats.total_count > 0 ? ((errors / stats.total_count) * 100).toFixed(1) : 0;
+                    document.getElementById('stat-error-rate').textContent = rate + '%';
+                }
+                
+                // 渲染小时图表
+                if (hourlyResult.data && hourlyResult.data.items) {
+                    renderHourlyChart(hourlyResult.data.items);
+                }
+                
+                // 渲染来源统计
+                if (sourceResult.data && sourceResult.data.items) {
+                    renderSourceStats(sourceResult.data.items);
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        function renderHourlyChart(trends) {
+            const chart = document.getElementById('hourly-chart');
+            if (!trends.length) {
+                chart.innerHTML = '<div class="chart-placeholder">暂无数据</div>';
+                return;
+            }
+            const maxCount = Math.max(...trends.map(t => t.count));
+            chart.innerHTML = trends.map(t => {
+                const height = maxCount > 0 ? (t.count / maxCount * 100) : 0;
+                const hour = t.hour.split('T')[1];
+                return `<div class="bar" style="height:${height}%">
+                    <span class="value">${t.count}</span>
+                    <span class="label">${hour}</span>
+                </div>`;
+            }).join('');
+        }
+
+        function renderSourceStats(sources) {
+            const container = document.getElementById('source-stats');
+            if (!sources.length) {
+                container.innerHTML = '<p style="color:#888;">暂无数据</p>';
+                return;
+            }
+            let html = '<table><thead><tr><th>来源</th><th>总数</th><th>错误数</th><th>错误率</th></tr></thead><tbody>';
+            sources.forEach(s => {
+                html += `<tr>
+                    <td>${s.source}</td>
+                    <td>${s.total_count}</td>
+                    <td>${s.by_level ? (s.by_level['ERROR'] || 0) + (s.by_level['FATAL'] || 0) : 0}</td>
+                    <td>${(s.error_rate * 100).toFixed(1)}%</td>
+                </tr>`;
+            });
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        }
+
+        async function updateHealth() {
+            try {
+                const result = await apiCall('GET', '/health');
+                const status = result.data && result.data.status === 'healthy';
+                document.getElementById('healthStatus').innerHTML = status ? 
+                    '<span class="status-ok">● 服务正常运行中</span>' : 
+                    '<span class="status-error">● 服务异常</span>';
+            } catch (e) {
+                document.getElementById('healthStatus').innerHTML = 
+                    '<span class="status-error">● 无法连接服务</span>';
+            }
+        }
+
+        // 初始化
+        updateHealth();
+        queryLogs();
+        setInterval(updateHealth, 10000);
+    </script>
+</body>
+</html>
