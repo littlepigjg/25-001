@@ -258,11 +258,7 @@ func main() {
 	// 静态文件服务
 	webDir := findWebDir()
 	if webDir != "" {
-		webFileServer := http.FileServer(http.Dir(webDir))
-		mux.Handle("/static/", http.StripPrefix("/static/", webFileServer))
 		log.Infof("static files served from: %s", webDir)
-	} else {
-		// 不注册根路径，下面会统一处理
 	}
 
 	// 组合中间件

@@ -21,10 +21,6 @@ type SchedulerService struct {
 	tickers    map[string]*time.Ticker
 	stopCh     map[string]chan struct{}
 	wg         sync.WaitGroup
-
-	procEnabledCh chan struct{}
-	procDisabled  bool
-	procMu        sync.Mutex
 }
 
 // NewSchedulerService 创建调度服务
@@ -41,7 +37,6 @@ func NewSchedulerService(
 		logger:       log,
 		tickers:      make(map[string]*time.Ticker),
 		stopCh:       make(map[string]chan struct{}),
-		procEnabledCh: make(chan struct{}),
 	}
 }
 
@@ -53,24 +48,23 @@ func (s *SchedulerService) Start(ctx context.Context) {
 		return
 	}
 	s.running = true
-	s.procEnabledCh = make(chan struct{})
-	s.procDisabled = false
 	s.mu.Unlock()
 
 	s.logger.Info("scheduler service starting...")
 
-	time.Sleep(10 * time.Millisecond)
-
+	// 启动告警规则扫描任务
 	s.startAlertScan(ctx)
 
+	// 启动日志清理任务
 	s.startLogCleanup(ctx)
 
+	// 启动告警自动解决任务
 	s.startAlertAutoResolve(ctx)
 
+	// 启动告警清理任务
 	s.startAlertCleanup(ctx)
 
-	close(s.procEnabledCh)
-
+	// 等待上下文取消
 	go func() {
 		<-ctx.Done()
 		s.Stop()
@@ -88,26 +82,20 @@ func (s *SchedulerService) Stop() {
 
 	s.logger.Info("scheduler service stopping...")
 
-	select {
-	case <-s.procEnabledCh:
-		s.procMu.Lock()
-		s.procDisabled = true
-		s.procMu.Unlock()
-
-		for name, ticker := range s.tickers {
-			ticker.Stop()
-			delete(s.tickers, name)
-		}
-
-		for name, ch := range s.stopCh {
-			close(ch)
-			delete(s.stopCh, name)
-		}
-
-		s.wg.Wait()
-	default:
-		s.logger.Info("scheduler not fully started yet, skipping graceful stop")
+	// 停止所有ticker
+	for name, ticker := range s.tickers {
+		ticker.Stop()
+		delete(s.tickers, name)
 	}
+
+	// 关闭所有stop channel
+	for name, ch := range s.stopCh {
+		close(ch)
+		delete(s.stopCh, name)
+	}
+
+	// 等待所有goroutine完成
+	s.wg.Wait()
 
 	s.running = false
 	s.logger.Info("scheduler service stopped")
@@ -118,21 +106,6 @@ func (s *SchedulerService) IsRunning() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.running
-}
-
-// IsProcEnabled 检查处理是否已启用
-func (s *SchedulerService) IsProcEnabled() bool {
-	s.procMu.Lock()
-	defer s.procMu.Unlock()
-	if s.procDisabled {
-		return false
-	}
-	select {
-	case <-s.procEnabledCh:
-		return true
-	default:
-		return false
-	}
 }
 
 // startAlertScan 启动告警规则扫描
@@ -159,9 +132,7 @@ func (s *SchedulerService) startAlertScan(ctx context.Context) {
 		for {
 			select {
 			case <-ticker.C:
-				if s.IsProcEnabled() {
-					s.scanAlerts(ctx)
-				}
+				s.scanAlerts(ctx)
 			case <-stopCh:
 				s.logger.Info("alert scan stopped")
 				return
@@ -214,9 +185,7 @@ func (s *SchedulerService) startLogCleanup(ctx context.Context) {
 		for {
 			select {
 			case <-ticker.C:
-				if s.IsProcEnabled() {
-					s.cleanupLogs(ctx)
-				}
+				s.cleanupLogs(ctx)
 			case <-stopCh:
 				s.logger.Info("log cleanup stopped")
 				return
@@ -251,6 +220,7 @@ func (s *SchedulerService) startAlertAutoResolve(ctx context.Context) {
 		interval = 15 * time.Minute
 	}
 
+	// 自动解决间隔：使用自动解决时间的一半
 	scanInterval := interval / 2
 	if scanInterval < time.Minute {
 		scanInterval = time.Minute
@@ -273,9 +243,7 @@ func (s *SchedulerService) startAlertAutoResolve(ctx context.Context) {
 		for {
 			select {
 			case <-ticker.C:
-				if s.IsProcEnabled() {
-					s.autoResolveAlerts(ctx)
-				}
+				s.autoResolveAlerts(ctx)
 			case <-stopCh:
 				s.logger.Info("alert auto resolve stopped")
 				return
@@ -299,7 +267,7 @@ func (s *SchedulerService) autoResolveAlerts(ctx context.Context) {
 
 // startAlertCleanup 启动告警清理
 func (s *SchedulerService) startAlertCleanup(ctx context.Context) {
-	interval := 24 * time.Hour
+	interval := 24 * time.Hour // 每天清理一次
 
 	ticker := time.NewTicker(interval)
 	name := "alert_cleanup"
@@ -318,9 +286,7 @@ func (s *SchedulerService) startAlertCleanup(ctx context.Context) {
 		for {
 			select {
 			case <-ticker.C:
-				if s.IsProcEnabled() {
-					s.cleanupAlerts(ctx)
-				}
+				s.cleanupAlerts(ctx)
 			case <-stopCh:
 				s.logger.Info("alert cleanup stopped")
 				return
@@ -354,17 +320,4 @@ func (s *SchedulerService) GetTaskStatus() map[string]bool {
 		status[name] = true
 	}
 	return status
-}
-
-// SetProcessingGuard 设置处理守卫
-func (s *SchedulerService) SetProcessingGuard(fn func() bool) {
-	s.procMu.Lock()
-	defer s.procMu.Unlock()
-
-	if fn != nil {
-		s.procEnabledCh = make(chan struct{})
-		if fn() {
-			close(s.procEnabledCh)
-		}
-	}
 }
